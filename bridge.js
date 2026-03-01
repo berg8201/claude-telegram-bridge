@@ -379,6 +379,8 @@ let currentProvider = config.primaryProvider;
 let runQueue = Promise.resolve();
 let queueDepth = 0;
 let bot = null;
+let activeJob = null;
+let normalRl = null;
 
 const providers = {
   claude: {
@@ -686,10 +688,18 @@ function formatStatus() {
     `Mode: ${cli.mode}`,
     `Provider: ${currentProvider}`,
     `Queue: ${queueDepth}`,
+    `Active job: ${activeJob ? `#${activeJob.id} via ${activeJob.provider}` : "none"}`,
     `History turns: ${conversationHistory.length}`,
     `Session file: ${config.sessionFile}`,
   ];
   return `Bridge status\n${status.join("\n")}\n\n${formatLimitState()}`;
+}
+
+function refreshNormalPrompt() {
+  if (!normalRl) return;
+  const busy = Boolean(activeJob) || queueDepth > 0;
+  const label = busy ? paint("1;33", "bridge*") : paint("1;34", "bridge");
+  normalRl.setPrompt(label + paint("2", "> "));
 }
 
 function checkpointId() {
@@ -814,6 +824,17 @@ async function runPrompt(userPrompt) {
 
   const fullPrompt = buildContextPacket(userPrompt);
   const firstProvider = preflight.routeProvider;
+  const startedAt = Date.now();
+  activeJob = {
+    id: startedAt,
+    provider: firstProvider,
+    prompt: clip(userPrompt, 80),
+    startedAt,
+  };
+  refreshNormalPrompt();
+  if (!bot) {
+    console.log(info(`Arbetar: ${firstProvider} | prompt="${activeJob.prompt}"`));
+  }
   let result = await runProviderWithPrompt(firstProvider, fullPrompt);
   const firstErrorText = result.errorText || result.response || "";
   const firstWasLimited = !result.ok && isQuotaOrRateLimitError(firstErrorText);
@@ -844,6 +865,12 @@ async function runPrompt(userPrompt) {
   if (!result.ok) {
     const errorMessage = result.errorText || `Ingen output (exit code ${result.code})`;
     await notifyUser(`❌ Körning misslyckades i ${result.provider}:\n${errorMessage.slice(0, 3500)}`);
+    if (!bot) {
+      const elapsed = Math.round((Date.now() - startedAt) / 1000);
+      console.log(errorLabel(`Klart med fel efter ${elapsed}s`));
+    }
+    activeJob = null;
+    refreshNormalPrompt();
     return;
   }
 
@@ -859,10 +886,20 @@ async function runPrompt(userPrompt) {
   saveSessionState();
   const truncated = response.length > 3900 ? response.slice(-3900) : response;
   await notifyUser(`[${result.provider}]\n${truncated}`);
+  if (!bot) {
+    const elapsed = Math.round((Date.now() - startedAt) / 1000);
+    console.log(success(`Klart på ${elapsed}s`));
+  }
+  activeJob = null;
+  refreshNormalPrompt();
 }
 
 function enqueuePrompt(userPrompt) {
   queueDepth += 1;
+  refreshNormalPrompt();
+  if (!bot) {
+    console.log(info(`Köad: ${clip(userPrompt, 60)} (queue=${queueDepth})`));
+  }
   runQueue = runQueue
     .then(() => runPrompt(userPrompt))
     .catch((error) => {
@@ -871,6 +908,7 @@ function enqueuePrompt(userPrompt) {
     })
     .finally(() => {
       queueDepth = Math.max(0, queueDepth - 1);
+      refreshNormalPrompt();
     });
 }
 
@@ -1109,7 +1147,8 @@ function startNormalBridge(rawArgs) {
   printNormalBanner(currentProvider);
 
   const rl = readline.createInterface({ input: process.stdin, output: process.stdout });
-  rl.setPrompt(paint("1;34", "bridge") + paint("2", "> "));
+  normalRl = rl;
+  refreshNormalPrompt();
   rl.prompt();
   rl.on("line", async (line) => {
     const trimmed = line.trim();
