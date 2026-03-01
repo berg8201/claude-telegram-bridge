@@ -153,6 +153,9 @@ bridge telegram
 - `/help` shows available bridge commands.
 - `/status` shows current mode, provider, queue and session info.
 - `/doctor` runs quick health checks (git, providers, hook, Telegram config/API).
+- `/checkpoint [name]` saves a checkpoint at current HEAD.
+- `/checkpoints` lists recent checkpoints.
+- `/rollback [id|name|sha]` switches to a new rollback branch at checkpoint target.
 - `/commit "message"` runs `git add -A` and `git commit -m`.
 - `/provider` shows active provider.
 - `/provider claude` switches to Claude.

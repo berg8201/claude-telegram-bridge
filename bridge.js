@@ -41,7 +41,7 @@ function printNormalBanner(providerName) {
   console.log(`${title} ${dim(`(provider: ${provider})`)}`);
   console.log(
     dim(
-      'Commands: /help /status /doctor /provider /provider claude /provider codex /risk /summary /commit "msg" /push [remote] [branch] /clear'
+      'Commands: /help /status /doctor /checkpoint [name] /checkpoints /rollback [target] /provider /provider claude /provider codex /risk /summary /commit "msg" /push [remote] [branch] /clear'
     )
   );
 }
@@ -52,6 +52,9 @@ function normalHelpText() {
     "  /help                         Visa hjälp",
     "  /status                       Visa bridge-status",
     "  /doctor                       Kör snabba hälsokontroller",
+    "  /checkpoint [name]            Skapa checkpoint på nuvarande commit",
+    "  /checkpoints                  Lista checkpoints",
+    "  /rollback [id|name|sha]       Byt till ny rollback-branch vid checkpoint",
     "  /provider                     Visa aktiv provider",
     "  /provider claude|codex        Byt provider",
     "  /risk                         Visa risk/limit-status",
@@ -268,6 +271,7 @@ function loadSessionState() {
     history: [],
     limitState: {},
     providerTelemetry: {},
+    checkpoints: [],
     updatedAt: null,
   };
 
@@ -279,6 +283,7 @@ function loadSessionState() {
   if (!state.providerTelemetry || typeof state.providerTelemetry !== "object") {
     state.providerTelemetry = {};
   }
+  if (!Array.isArray(state.checkpoints)) state.checkpoints = [];
   return state;
 }
 
@@ -289,6 +294,7 @@ function saveSessionState() {
       history: conversationHistory,
       limitState: providerLimitState,
       providerTelemetry,
+      checkpoints,
       updatedAt: new Date().toISOString(),
     },
     null,
@@ -365,6 +371,7 @@ const conversationHistory = sessionState.history;
 let runningSummary = sessionState.summary || "";
 let providerLimitState = sessionState.limitState || {};
 let providerTelemetry = sessionState.providerTelemetry || {};
+let checkpoints = sessionState.checkpoints || [];
 if (!runningSummary && conversationHistory.length > 0) {
   refreshSummary();
 }
@@ -685,6 +692,53 @@ function formatStatus() {
   return `Bridge status\n${status.join("\n")}\n\n${formatLimitState()}`;
 }
 
+function checkpointId() {
+  const iso = new Date().toISOString().replace(/[-:TZ.]/g, "");
+  return `cp-${iso.slice(0, 14)}`;
+}
+
+function sanitizeName(name) {
+  return String(name || "")
+    .trim()
+    .replace(/[^a-zA-Z0-9._-]+/g, "-")
+    .replace(/^-+|-+$/g, "")
+    .slice(0, 40);
+}
+
+function formatCheckpointList() {
+  if (checkpoints.length === 0) return "Inga checkpoints ännu.";
+  const rows = checkpoints
+    .slice(-10)
+    .reverse()
+    .map(
+      (cp) =>
+        `${cp.id} | ${cp.name || "-"} | ${cp.sha.slice(0, 8)} | dirty=${cp.dirty ? "yes" : "no"} | ${cp.createdAt}`
+    );
+  return `Checkpoints (senaste först)\n${rows.join("\n")}`;
+}
+
+function resolveCheckpointTarget(raw) {
+  const target = String(raw || "").trim();
+  if (!target) return checkpoints[checkpoints.length - 1] || null;
+
+  const byId = checkpoints.find((cp) => cp.id === target);
+  if (byId) return byId;
+
+  const byName = checkpoints
+    .slice()
+    .reverse()
+    .find((cp) => cp.name === target);
+  if (byName) return byName;
+
+  const byShaPrefix = checkpoints
+    .slice()
+    .reverse()
+    .find((cp) => cp.sha.startsWith(target));
+  if (byShaPrefix) return byShaPrefix;
+
+  return { id: "manual", name: "manual", sha: target, createdAt: new Date().toISOString(), dirty: false };
+}
+
 async function runPushNotifier(remote, remoteUrl) {
   const notifierScript = path.join(__dirname, "scripts", "telegram-push-notify.sh");
   if (!fs.existsSync(notifierScript)) {
@@ -831,6 +885,82 @@ async function handleCommand(text, reply) {
     return true;
   }
 
+  if (text === "/checkpoints") {
+    await reply(formatCheckpointList());
+    return true;
+  }
+
+  if (text.startsWith("/checkpoint")) {
+    const name = sanitizeName(text.slice("/checkpoint".length));
+    const gitRepo = await runCommand("git", ["rev-parse", "--is-inside-work-tree"], {
+      cwd: process.cwd(),
+    });
+    if (!gitRepo.ok) {
+      await reply("❌ Inte i ett git-repo.");
+      return true;
+    }
+
+    const shaResult = await runCommand("git", ["rev-parse", "HEAD"], { cwd: process.cwd() });
+    if (!shaResult.ok) {
+      await reply(`❌ Kunde inte läsa HEAD:\n${clip(shaResult.output || shaResult.error, 1000)}`);
+      return true;
+    }
+    const sha = shaResult.output.trim();
+
+    const dirtyResult = await runCommand("git", ["status", "--porcelain"], { cwd: process.cwd() });
+    const dirty = Boolean(dirtyResult.ok && dirtyResult.output.trim());
+
+    const cp = {
+      id: checkpointId(),
+      name: name || "",
+      sha,
+      branch: (await runCommand("git", ["rev-parse", "--abbrev-ref", "HEAD"], { cwd: process.cwd() }))
+        .output
+        .trim(),
+      createdAt: new Date().toISOString(),
+      dirty,
+    };
+    checkpoints.push(cp);
+    if (checkpoints.length > 100) checkpoints = checkpoints.slice(-100);
+    saveSessionState();
+
+    const dirtyNote = dirty
+      ? "\n⚠️ Working tree har ocommittade ändringar (de ingår inte i checkpoint SHA)."
+      : "";
+    await reply(
+      `✅ Checkpoint skapad.\nID: ${cp.id}\nName: ${cp.name || "-"}\nSHA: ${cp.sha.slice(0, 8)}\nBranch: ${cp.branch}${dirtyNote}`
+    );
+    return true;
+  }
+
+  if (text.startsWith("/rollback")) {
+    const targetRaw = text.slice("/rollback".length).trim();
+    const target = resolveCheckpointTarget(targetRaw);
+    if (!target) {
+      await reply("❌ Ingen checkpoint hittades. Skapa en med /checkpoint först.");
+      return true;
+    }
+
+    const branchName = `bridge-rollback-${target.sha.slice(0, 8)}-${Date.now().toString().slice(-6)}`;
+    const switchResult = await runCommand("git", ["switch", "-c", branchName, target.sha], {
+      cwd: process.cwd(),
+    });
+    if (!switchResult.ok) {
+      await reply(
+        `❌ Rollback misslyckades.\n${clip(
+          switchResult.output || switchResult.error || "okänt fel",
+          1400
+        )}\nTips: commit/stash lokala ändringar först.`
+      );
+      return true;
+    }
+
+    await reply(
+      `✅ Rollback klar.\nNy branch: ${branchName}\nTarget: ${target.sha.slice(0, 8)} (${target.id}/${target.name || "-"})`
+    );
+    return true;
+  }
+
   if (text === "/doctor") {
     await reply("🩺 Kör doctor...");
     await reply(await runDoctor());
@@ -965,7 +1095,7 @@ function startTelegramBridge() {
 
   bot.sendMessage(
     config.chatId,
-    `🚀 *claude-telegram-bridge* startad!\n\nAktiv provider: *${currentProvider}*\nSkicka text för att köra. Kommandon: /help, /status, /doctor, /provider, /provider claude, /provider codex, /risk, /summary, /commit "msg", /push [remote] [branch], /clear`,
+    `🚀 *claude-telegram-bridge* startad!\n\nAktiv provider: *${currentProvider}*\nSkicka text för att köra. Kommandon: /help, /status, /doctor, /checkpoint [name], /checkpoints, /rollback [target], /provider, /provider claude, /provider codex, /risk, /summary, /commit "msg", /push [remote] [branch], /clear`,
     { parse_mode: "Markdown" }
   );
 }
