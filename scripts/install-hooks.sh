@@ -2,6 +2,5 @@
 set -euo pipefail
 
 git config core.hooksPath .githooks
-chmod +x .githooks/post-push scripts/telegram-push-notify.sh
+chmod +x .githooks/pre-push scripts/telegram-push-notify.sh
 echo "Installed git hooks path: .githooks"
-

@@ -703,8 +703,8 @@ async function runDoctor() {
 
   const hooksPathResult = await runCommand("git", ["config", "--get", "core.hooksPath"]);
   const hooksPath = hooksPathResult.ok ? hooksPathResult.output.trim() : "";
-  const hookFile = path.join(process.cwd(), hooksPath || ".githooks", "post-push");
-  const hookOk = hooksPathResult.ok && fs.existsSync(hookFile);
+  const hookDir = path.join(process.cwd(), hooksPath || ".githooks");
+  const hookOk = hooksPathResult.ok && fs.existsSync(path.join(hookDir, "pre-push"));
   rows.push(hookOk ? `✅ git hook: ${hooksPath || ".githooks"}` : "⚠️ git hook: saknas eller ej konfigurerad");
 
   const hasTelegramConfig = Boolean(config.botToken && config.chatId);

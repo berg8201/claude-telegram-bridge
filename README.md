@@ -28,7 +28,7 @@ npm run hooks:install
 ```
 
 `npm link` is a one-time setup to make the `bridge` command available globally.
-`npm run hooks:install` enables the repository `post-push` hook.
+`npm run hooks:install` enables the repository `pre-push` hook.
 
 ## Configuration
 
