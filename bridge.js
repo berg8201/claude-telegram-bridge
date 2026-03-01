@@ -8,6 +8,53 @@ const path = require("path");
 const readline = require("readline");
 const TelegramBot = require("node-telegram-bot-api");
 
+const USE_COLOR = Boolean(process.stdout.isTTY && process.env.TERM !== "dumb");
+
+function paint(code, text) {
+  if (!USE_COLOR) return text;
+  return `\u001b[${code}m${text}\u001b[0m`;
+}
+
+function dim(text) {
+  return paint("2", text);
+}
+
+function info(text) {
+  return `${paint("36", "ℹ")} ${text}`;
+}
+
+function success(text) {
+  return `${paint("32", "✔")} ${text}`;
+}
+
+function warn(text) {
+  return `${paint("33", "⚠")} ${text}`;
+}
+
+function errorLabel(text) {
+  return `${paint("31", "✖")} ${text}`;
+}
+
+function printNormalBanner(providerName) {
+  const title = paint("1;36", "Bridge Normal Mode");
+  const provider = paint("1", providerName);
+  console.log(`${title} ${dim(`(provider: ${provider})`)}`);
+  console.log(dim("Commands: /help /provider /provider claude /provider codex /risk /summary /push [remote] [branch] /clear"));
+}
+
+function normalHelpText() {
+  return [
+    "Kommandon:",
+    "  /help                         Visa hjälp",
+    "  /provider                     Visa aktiv provider",
+    "  /provider claude|codex        Byt provider",
+    "  /risk                         Visa risk/limit-status",
+    "  /summary                      Visa sammanfattning",
+    "  /push [remote] [branch]       Kör git push",
+    "  /clear                        Rensa historik",
+  ].join("\n");
+}
+
 function loadDotEnvFile(envPath, overwrite = false) {
   if (!fs.existsSync(envPath)) return;
   let content = "";
@@ -440,6 +487,23 @@ async function notifyUser(message) {
     await bot.sendMessage(config.chatId, message);
     return;
   }
+
+  if (message.startsWith("✅")) {
+    console.log(success(message.slice(1).trim()));
+    return;
+  }
+  if (message.startsWith("⚠️")) {
+    console.log(warn(message.replace("⚠️", "").trim()));
+    return;
+  }
+  if (message.startsWith("❌")) {
+    console.log(errorLabel(message.replace("❌", "").trim()));
+    return;
+  }
+  if (message.startsWith("[")) {
+    console.log(info(message));
+    return;
+  }
   console.log(message);
 }
 
@@ -580,6 +644,11 @@ function enqueuePrompt(userPrompt) {
 }
 
 async function handleCommand(text, reply) {
+  if (text === "/help") {
+    await reply(normalHelpText());
+    return true;
+  }
+
   if (text.startsWith("/push")) {
     const parts = text.trim().split(/\s+/).filter(Boolean);
     const remote = parts[1] || "origin";
@@ -665,7 +734,7 @@ function startTelegramBridge() {
 
   bot.sendMessage(
     config.chatId,
-    `🚀 *claude-telegram-bridge* startad!\n\nAktiv provider: *${currentProvider}*\nSkicka text för att köra. Kommandon: /provider, /provider claude, /provider codex, /risk, /summary, /push [remote] [branch], /clear`,
+    `🚀 *claude-telegram-bridge* startad!\n\nAktiv provider: *${currentProvider}*\nSkicka text för att köra. Kommandon: /help, /provider, /provider claude, /provider codex, /risk, /summary, /push [remote] [branch], /clear`,
     { parse_mode: "Markdown" }
   );
 }
@@ -676,20 +745,24 @@ function startNormalBridge(rawArgs) {
     currentProvider = maybeProvider;
   }
 
-  console.log(
-    `[bridge] Normal mode startad. Aktiv provider: ${currentProvider}. Kommandon: /provider, /provider claude, /provider codex, /risk, /summary, /push [remote] [branch], /clear`
-  );
+  printNormalBanner(currentProvider);
 
   const rl = readline.createInterface({ input: process.stdin, output: process.stdout });
+  rl.setPrompt(paint("1;34", "bridge") + paint("2", "> "));
+  rl.prompt();
   rl.on("line", async (line) => {
     const trimmed = line.trim();
-    if (!trimmed) return;
+    if (!trimmed) {
+      rl.prompt();
+      return;
+    }
     const handled = await handleCommand(trimmed, async (message) => {
-      console.log(`[bridge] ${message}`);
+      console.log(info(message));
     });
     if (!handled) {
       enqueuePrompt(trimmed);
     }
+    rl.prompt();
   });
 }
 

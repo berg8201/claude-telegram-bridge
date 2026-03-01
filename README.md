@@ -150,6 +150,7 @@ bridge telegram
 
 ### Commands
 
+- `/help` shows available bridge commands.
 - `/provider` shows active provider.
 - `/provider claude` switches to Claude.
 - `/provider codex` switches to Codex.
