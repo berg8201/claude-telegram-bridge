@@ -135,6 +135,7 @@ bridge normal claude
 Passthrough mode (full provider TTY/graphics):
 
 ```bash
+bridge pass
 bridge passthrough
 bridge passthrough claude
 bridge passthrough codex

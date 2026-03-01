@@ -72,7 +72,7 @@ function normalizeProvider(value) {
 
 function parseCliArgs() {
   const args = process.argv.slice(2);
-  const knownModes = ["normal", "telegram", "passthrough", "passthru"];
+  const knownModes = ["normal", "telegram", "passthrough", "passthru", "pass"];
 
   if (args.length === 0) {
     return { mode: "normal", rest: [] };
@@ -80,7 +80,7 @@ function parseCliArgs() {
 
   const first = (args[0] || "").toLowerCase();
   if (knownModes.includes(first)) {
-    const mappedMode = first === "passthru" ? "passthrough" : first;
+    const mappedMode = ["passthru", "pass"].includes(first) ? "passthrough" : first;
     return { mode: mappedMode, rest: args.slice(1) };
   }
 
