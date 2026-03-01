@@ -511,7 +511,7 @@ function runCommand(command, args, options = {}) {
   return new Promise((resolve) => {
     const child = spawn(command, args, {
       cwd: options.cwd || process.cwd(),
-      env: process.env,
+      env: { ...process.env, ...(options.env || {}) },
       stdio: ["ignore", "pipe", "pipe"],
     });
 
@@ -537,6 +537,29 @@ function runCommand(command, args, options = {}) {
       });
     });
   });
+}
+
+async function runPushNotifier(remote, remoteUrl) {
+  const notifierScript = path.join(__dirname, "scripts", "telegram-push-notify.sh");
+  if (!fs.existsSync(notifierScript)) {
+    return { ok: false, skipped: true, reason: "missing_notifier_script" };
+  }
+
+  const result = await runCommand("bash", [notifierScript, remote, remoteUrl], {
+    cwd: process.cwd(),
+    env: { DEDUP_TTL_SECONDS: "60" },
+  });
+
+  if (!result.ok) {
+    return {
+      ok: false,
+      skipped: false,
+      reason: "notifier_failed",
+      details: result.output || result.error || `exit code ${result.code}`,
+    };
+  }
+
+  return { ok: true, skipped: false };
 }
 
 function runProviderWithPrompt(providerName, fullPrompt) {
@@ -662,6 +685,15 @@ async function handleCommand(text, reply) {
     if (result.ok) {
       const out = result.output ? `\n${clip(result.output, 3200)}` : "";
       await reply(`✅ Push lyckades.${out}`);
+
+      const remoteUrlResult = await runCommand("git", ["remote", "get-url", remote], {
+        cwd: process.cwd(),
+      });
+      const remoteUrl = remoteUrlResult.ok ? remoteUrlResult.output.split("\n")[0] : "unknown";
+      const notifyResult = await runPushNotifier(remote, remoteUrl);
+      if (!notifyResult.ok && !notifyResult.skipped) {
+        await reply(`⚠️ Push-notis misslyckades: ${clip(notifyResult.details || "okänt fel", 500)}`);
+      }
     } else {
       const out = result.output || result.error || `exit code ${result.code}`;
       await reply(`❌ Push misslyckades.\n${clip(out, 3200)}`);

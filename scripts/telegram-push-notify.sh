@@ -5,6 +5,8 @@ REMOTE_NAME="${1:-origin}"
 REMOTE_URL="${2:-unknown}"
 BRIDGE_HOME="${BRIDGE_HOME:-$HOME/.config/bridge}"
 LOG_FILE="$BRIDGE_HOME/push-hook.log"
+STATE_FILE="$BRIDGE_HOME/push-notify-state.tsv"
+DEDUP_TTL_SECONDS="${DEDUP_TTL_SECONDS:-60}"
 
 log_msg() {
   local msg="$1"
@@ -12,6 +14,37 @@ log_msg() {
   if ! echo "$(date -Is) ${msg}" >>"$LOG_FILE" 2>/dev/null; then
     echo "$(date -Is) ${msg}" >>"/tmp/bridge-push-hook.log" 2>/dev/null || true
   fi
+}
+
+state_write() {
+  local key="$1"
+  local now="$2"
+  mkdir -p "$BRIDGE_HOME" 2>/dev/null || true
+  local target="$STATE_FILE"
+  if ! { [ -e "$target" ] || touch "$target"; } 2>/dev/null; then
+    target="/tmp/bridge-push-notify-state.tsv"
+    touch "$target" 2>/dev/null || true
+  fi
+
+  local tmp
+  tmp="$(mktemp)"
+  awk -F'\t' -v now="$now" -v ttl="$DEDUP_TTL_SECONDS" '{
+    if (NF >= 2 && (now - $2) <= ttl) print $0
+  }' "$target" >"$tmp" 2>/dev/null || true
+  printf "%s\t%s\n" "$key" "$now" >>"$tmp"
+  mv "$tmp" "$target" 2>/dev/null || true
+}
+
+state_seen_recently() {
+  local key="$1"
+  local now="$2"
+  local target="$STATE_FILE"
+  [ -f "$target" ] || target="/tmp/bridge-push-notify-state.tsv"
+  [ -f "$target" ] || return 1
+  awk -F'\t' -v k="$key" -v now="$now" -v ttl="$DEDUP_TTL_SECONDS" '
+    $1 == k && (now - $2) <= ttl { found=1 }
+    END { exit(found ? 0 : 1) }
+  ' "$target"
 }
 
 load_env_file() {
@@ -79,6 +112,14 @@ if [ -z "$UPDATES" ]; then
 fi
 
 LAST_COMMIT="$(git log -1 --pretty='%h %s' 2>/dev/null || echo 'unknown commit')"
+LAST_COMMIT_SHA="$(git rev-parse HEAD 2>/dev/null || echo unknown-sha)"
+DEDUP_KEY="${DEDUP_KEY:-${REPO_ROOT}|${REMOTE_NAME}|${BRANCH}|${LAST_COMMIT_SHA}}"
+NOW_EPOCH="$(date +%s)"
+
+if state_seen_recently "$DEDUP_KEY" "$NOW_EPOCH"; then
+  log_msg "[bridge-hook] Duplicate notification skipped (key=${DEDUP_KEY})"
+  exit 0
+fi
 
 TEXT="✅ Git push klar
 Repo: ${REPO_NAME}
@@ -89,10 +130,18 @@ Host: ${USER_NAME}@${HOST_NAME}
 Commit: ${LAST_COMMIT}
 Refs:${UPDATES}"
 
-if ! curl -sS --max-time 10 \
+if ! RESPONSE="$(curl -sS --max-time 10 \
   -X POST "https://api.telegram.org/bot${BOT_TOKEN}/sendMessage" \
   -d "chat_id=${CHAT_ID}" \
   --data-urlencode "text=${TEXT}" \
-  >/dev/null; then
+)"; then
   log_msg "[bridge-hook] Telegram send failed (remote=${REMOTE_NAME}, branch=${BRANCH})"
+  exit 0
 fi
+
+if ! printf "%s" "$RESPONSE" | grep -q '"ok":true'; then
+  log_msg "[bridge-hook] Telegram API returned non-ok (remote=${REMOTE_NAME}, branch=${BRANCH})"
+  exit 0
+fi
+
+state_write "$DEDUP_KEY" "$NOW_EPOCH"

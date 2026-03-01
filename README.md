@@ -172,6 +172,7 @@ Any non-command text is treated as a prompt and run through the active provider.
 ## Git Push Notifications
 
 After running `npm run hooks:install`, each successful `git push` in this repo sends a Telegram status message using your bridge config (`BOT_TOKEN`, `CHAT_ID`).
+`/push` also triggers the same notifier as fallback, with dedupe to avoid double messages.
 
 ## License
 
