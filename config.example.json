@@ -9,6 +9,7 @@
   "enableSessionPersistence": true,
   "redactPromptLogs": true,
   "enableMutatingGitCommands": false,
+  "outputStyle": "pretty",
   "riskHighPromptChars": 1200,
   "riskHighHistoryTurns": 8,
   "riskLimitWindowMinutes": 180,

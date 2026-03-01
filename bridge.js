@@ -36,12 +36,20 @@ function errorLabel(text) {
 }
 
 function printNormalBanner(providerName) {
-  const title = paint("1;36", "Bridge Normal Mode");
+  if (config.outputStyle === "plain") {
+    console.log("Bridge Normal Mode");
+    console.log(`Provider: ${providerName}`);
+    console.log("Commands: /help /status /doctor /provider /risk /summary /checkpoint /checkpoints /rollback /commit /push /clear");
+    return;
+  }
+
+  const title = paint("1;36", "=== Bridge Normal Mode ===");
   const provider = paint("1", providerName);
-  console.log(`${title} ${dim(`(provider: ${provider})`)}`);
+  console.log(title);
+  console.log(dim(`Provider: ${provider}`));
   console.log(
     dim(
-      'Commands: /help /status /doctor /checkpoint [name] /checkpoints /rollback [target] /provider /provider claude /provider codex /risk /summary /commit "msg" /push [remote] [branch] /clear'
+      "Quick cmds: /help /status /doctor /provider /risk /summary /checkpoint /checkpoints /rollback /commit /push /clear"
     )
   );
 }
@@ -211,6 +219,7 @@ function loadConfig(mode) {
       process.env.ENABLE_MUTATING_GIT_COMMANDS ?? fileConfig.enableMutatingGitCommands,
       false
     ),
+    outputStyle: (process.env.OUTPUT_STYLE || fileConfig.outputStyle || "pretty").toLowerCase(),
   };
 
   if (!["claude", "codex"].includes(config.primaryProvider)) {
@@ -250,6 +259,11 @@ function loadConfig(mode) {
 
   if (config.riskLimitWindowMinutes < 1 || Number.isNaN(config.riskLimitWindowMinutes)) {
     console.error("[bridge] RISK_LIMIT_WINDOW_MINUTES måste vara 1 eller större.");
+    process.exit(1);
+  }
+
+  if (!["pretty", "plain"].includes(config.outputStyle)) {
+    console.error("[bridge] OUTPUT_STYLE måste vara 'pretty' eller 'plain'.");
     process.exit(1);
   }
 
@@ -608,7 +622,12 @@ function estimateRemainingPercent(providerName) {
 
 async function notifyUser(message) {
   if (bot) {
-    await bot.sendMessage(config.chatId, message);
+    await sendTelegramMessage(message);
+    return;
+  }
+
+  if (config.outputStyle === "plain") {
+    console.log(String(message || ""));
     return;
   }
 
@@ -629,6 +648,67 @@ async function notifyUser(message) {
     return;
   }
   console.log(message);
+}
+
+function escapeHtml(text) {
+  return String(text || "")
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;");
+}
+
+function formatTelegramMessage(message) {
+  const raw = String(message || "");
+  if (config.outputStyle === "plain") {
+    return { text: raw || "(empty)" };
+  }
+  const trimmed = raw.trim();
+  const pre = (title, body) =>
+    `<b>${escapeHtml(title)}</b>\n<pre>${escapeHtml((body || "").trim())}</pre>`;
+
+  if (!trimmed) {
+    return { text: "<i>(empty)</i>", options: { parse_mode: "HTML" } };
+  }
+
+  if (raw.startsWith("Kommandon:")) {
+    return { text: pre("Kommandon", raw.replace(/^Kommandon:\s*/, "")), options: { parse_mode: "HTML" } };
+  }
+  if (raw.startsWith("Bridge status\n")) {
+    return {
+      text: pre("Bridge Status", raw.slice("Bridge status\n".length)),
+      options: { parse_mode: "HTML" },
+    };
+  }
+  if (raw.startsWith("Doctor\n")) {
+    return { text: pre("Doctor", raw.slice("Doctor\n".length)), options: { parse_mode: "HTML" } };
+  }
+  if (raw.startsWith("Riskstatus (estimat)\n")) {
+    return {
+      text: pre("Riskstatus", raw.slice("Riskstatus (estimat)\n".length)),
+      options: { parse_mode: "HTML" },
+    };
+  }
+  if (raw.startsWith("Checkpoints (senaste först)\n")) {
+    return {
+      text: pre("Checkpoints", raw.slice("Checkpoints (senaste först)\n".length)),
+      options: { parse_mode: "HTML" },
+    };
+  }
+  if (raw.startsWith("Recent session summary")) {
+    return { text: pre("Summary", raw), options: { parse_mode: "HTML" } };
+  }
+
+  if (raw.includes("\n")) {
+    return { text: `<pre>${escapeHtml(raw)}</pre>`, options: { parse_mode: "HTML" } };
+  }
+
+  return { text: escapeHtml(raw), options: { parse_mode: "HTML" } };
+}
+
+async function sendTelegramMessage(message) {
+  if (!bot) return;
+  const formatted = formatTelegramMessage(message);
+  await bot.sendMessage(config.chatId, formatted.text, formatted.options);
 }
 
 function runCommand(command, args, options = {}) {
@@ -746,6 +826,7 @@ function formatStatus() {
     `Session persistence: ${config.enableSessionPersistence ? "enabled" : "disabled"}`,
     `Prompt log redaction: ${config.redactPromptLogs ? "enabled" : "disabled"}`,
     `Mutating git commands: ${config.enableMutatingGitCommands ? "enabled" : "disabled"}`,
+    `Output style: ${config.outputStyle}`,
   ];
   return `Bridge status\n${status.join("\n")}\n\n${formatLimitState()}`;
 }
@@ -1197,18 +1278,19 @@ function startTelegramBridge() {
     if (!text) return;
 
     const handled = await handleCommand(text, async (message) => {
-      await bot.sendMessage(config.chatId, message);
+      await sendTelegramMessage(message);
     });
     if (!handled) {
-      await bot.sendMessage(config.chatId, `✅ Kör med ${currentProvider}: ${text}`);
+      await sendTelegramMessage(`✅ Kör med ${currentProvider}: ${text}`);
       enqueuePrompt(text);
     }
   });
 
-  bot.sendMessage(
-    config.chatId,
-    `🚀 *claude-telegram-bridge* startad!\n\nAktiv provider: *${currentProvider}*\nSkicka text för att köra. Kommandon: /help, /status, /doctor, /checkpoint [name], /checkpoints, /rollback [target], /provider, /provider claude, /provider codex, /risk, /summary, /commit "msg", /push [remote] [branch], /clear`,
-    { parse_mode: "Markdown" }
+  sendTelegramMessage(
+    `Bridge online
+Provider: ${currentProvider}
+Skicka text för att köra.
+Snabbkommandon: /help /status /doctor /provider /risk /summary`
   );
 }
 

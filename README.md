@@ -52,6 +52,7 @@ AUTO_ROUTE_HIGH_RISK=true
 ENABLE_SESSION_PERSISTENCE=true
 REDACT_PROMPT_LOGS=true
 ENABLE_MUTATING_GIT_COMMANDS=false
+OUTPUT_STYLE=pretty
 RISK_HIGH_PROMPT_CHARS=1200
 RISK_HIGH_HISTORY_TURNS=8
 RISK_LIMIT_WINDOW_MINUTES=180
@@ -84,6 +85,7 @@ cp /path/to/claude-telegram-bridge/config.example.json ~/.config/bridge/config.j
   "enableSessionPersistence": true,
   "redactPromptLogs": true,
   "enableMutatingGitCommands": false,
+  "outputStyle": "pretty",
   "riskHighPromptChars": 1200,
   "riskHighHistoryTurns": 8,
   "riskLimitWindowMinutes": 180,
@@ -109,6 +111,7 @@ cp /path/to/claude-telegram-bridge/config.example.json ~/.config/bridge/config.j
 | `enableSessionPersistence` | Persists session history/summary to session file (`true`/`false`) |
 | `redactPromptLogs` | Redacts prompt text in local terminal logs (`true`/`false`) |
 | `enableMutatingGitCommands` | Enables `/commit`, `/push`, `/rollback` bridge commands (default `false`) |
+| `outputStyle` | Output style: `pretty` (formatted Telegram + styled terminal) or `plain` |
 | `riskHighPromptChars` | Prompt length threshold used by risk guard |
 | `riskHighHistoryTurns` | Recent context turns threshold used by risk guard |
 | `riskLimitWindowMinutes` | How long a detected limit event keeps provider in high-risk state |
