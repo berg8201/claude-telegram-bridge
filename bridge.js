@@ -54,13 +54,13 @@ function normalHelpText() {
     "  /doctor                       Kör snabba hälsokontroller",
     "  /checkpoint [name]            Skapa checkpoint på nuvarande commit",
     "  /checkpoints                  Lista checkpoints",
-    "  /rollback [id|name|sha]       Byt till ny rollback-branch vid checkpoint",
+    "  /rollback [id|name|sha]       Byt till ny rollback-branch vid checkpoint (kräver ENABLE_MUTATING_GIT_COMMANDS=true)",
     "  /provider                     Visa aktiv provider",
     "  /provider claude|codex        Byt provider",
     "  /risk                         Visa risk/limit-status",
     "  /summary                      Visa sammanfattning",
-    '  /commit "message"             Add+commit alla ändringar',
-    "  /push [remote] [branch]       Kör git push",
+    '  /commit "message"             Add+commit alla ändringar (kräver ENABLE_MUTATING_GIT_COMMANDS=true)',
+    "  /push [remote] [branch]       Kör git push (kräver ENABLE_MUTATING_GIT_COMMANDS=true)",
     "  /clear                        Rensa historik",
   ].join("\n");
 }
@@ -127,6 +127,14 @@ function normalizeProvider(value) {
   return (value || "").trim().toLowerCase();
 }
 
+function parseBool(value, defaultValue) {
+  if (value === undefined || value === null || value === "") return defaultValue;
+  const normalized = String(value).trim().toLowerCase();
+  if (["1", "true", "yes", "on"].includes(normalized)) return true;
+  if (["0", "false", "no", "off"].includes(normalized)) return false;
+  return defaultValue;
+}
+
 function parseCliArgs() {
   const args = process.argv.slice(2);
   const knownModes = ["normal", "telegram", "passthrough", "passthru", "pass"];
@@ -159,9 +167,10 @@ function loadConfig(mode) {
       (process.env.PRIMARY_PROVIDER || fileConfig.primaryProvider || "claude").toLowerCase(),
     fallbackProvider:
       (process.env.FALLBACK_PROVIDER || fileConfig.fallbackProvider || "codex").toLowerCase(),
-    enableAutoFallback:
-      String(process.env.ENABLE_AUTO_FALLBACK || fileConfig.enableAutoFallback || "true")
-        .toLowerCase() !== "false",
+    enableAutoFallback: parseBool(
+      process.env.ENABLE_AUTO_FALLBACK ?? fileConfig.enableAutoFallback,
+      true
+    ),
     historyWindow: Number(process.env.HISTORY_WINDOW || fileConfig.historyWindow || 12),
     claudeCommand: process.env.CLAUDE_COMMAND || fileConfig.claudeCommand || "claude",
     codexCommand: process.env.CODEX_COMMAND || fileConfig.codexCommand || "codex",
@@ -173,9 +182,10 @@ function loadConfig(mode) {
       projectSessionFileDefault(),
     summaryMaxTurns: Number(process.env.SUMMARY_MAX_TURNS || fileConfig.summaryMaxTurns || 30),
     summaryMaxChars: Number(process.env.SUMMARY_MAX_CHARS || fileConfig.summaryMaxChars || 3500),
-    enableRiskGuard:
-      String(process.env.ENABLE_RISK_GUARD || fileConfig.enableRiskGuard || "true").toLowerCase() !==
-      "false",
+    enableRiskGuard: parseBool(
+      process.env.ENABLE_RISK_GUARD ?? fileConfig.enableRiskGuard,
+      true
+    ),
     riskHighPromptChars: Number(
       process.env.RISK_HIGH_PROMPT_CHARS || fileConfig.riskHighPromptChars || 1200
     ),
@@ -185,9 +195,22 @@ function loadConfig(mode) {
     riskLimitWindowMinutes: Number(
       process.env.RISK_LIMIT_WINDOW_MINUTES || fileConfig.riskLimitWindowMinutes || 180
     ),
-    autoRouteHighRisk:
-      String(process.env.AUTO_ROUTE_HIGH_RISK || fileConfig.autoRouteHighRisk || "true")
-        .toLowerCase() !== "false",
+    autoRouteHighRisk: parseBool(
+      process.env.AUTO_ROUTE_HIGH_RISK ?? fileConfig.autoRouteHighRisk,
+      true
+    ),
+    enableSessionPersistence: parseBool(
+      process.env.ENABLE_SESSION_PERSISTENCE ?? fileConfig.enableSessionPersistence,
+      true
+    ),
+    redactPromptLogs: parseBool(
+      process.env.REDACT_PROMPT_LOGS ?? fileConfig.redactPromptLogs,
+      true
+    ),
+    enableMutatingGitCommands: parseBool(
+      process.env.ENABLE_MUTATING_GIT_COMMANDS ?? fileConfig.enableMutatingGitCommands,
+      false
+    ),
   };
 
   if (!["claude", "codex"].includes(config.primaryProvider)) {
@@ -275,6 +298,10 @@ function loadSessionState() {
     updatedAt: null,
   };
 
+  if (!config.enableSessionPersistence) {
+    return initialState;
+  }
+
   const state = safeReadJson(config.sessionFile, initialState);
   if (!state || typeof state !== "object") return initialState;
   if (!Array.isArray(state.history)) state.history = [];
@@ -288,6 +315,8 @@ function loadSessionState() {
 }
 
 function saveSessionState() {
+  if (!config.enableSessionPersistence) return;
+
   const payload = JSON.stringify(
     {
       summary: runningSummary,
@@ -314,6 +343,14 @@ function saveSessionState() {
 function clip(text, maxLen) {
   const str = String(text || "");
   return str.length <= maxLen ? str : `${str.slice(0, maxLen)}...`;
+}
+
+function promptForLog(text, maxLen = 80) {
+  const str = String(text || "");
+  if (config.redactPromptLogs) {
+    return `[redacted ${str.length} chars]`;
+  }
+  return clip(str, maxLen);
 }
 
 function refreshSummary() {
@@ -672,6 +709,21 @@ async function runDoctor() {
 
   const hasTelegramConfig = Boolean(config.botToken && config.chatId);
   rows.push(hasTelegramConfig ? "✅ telegram config: BOT_TOKEN + CHAT_ID" : "⚠️ telegram config: saknas");
+  rows.push(
+    config.enableMutatingGitCommands
+      ? "⚠️ mutating git commands: enabled"
+      : "✅ mutating git commands: disabled"
+  );
+  rows.push(
+    config.enableSessionPersistence
+      ? "⚠️ session persistence: enabled"
+      : "✅ session persistence: disabled"
+  );
+  rows.push(
+    config.redactPromptLogs
+      ? "✅ prompt log redaction: enabled"
+      : "⚠️ prompt log redaction: disabled"
+  );
 
   if (hasTelegramConfig) {
     const url = `https://api.telegram.org/bot${config.botToken}/getMe`;
@@ -690,7 +742,10 @@ function formatStatus() {
     `Queue: ${queueDepth}`,
     `Active job: ${activeJob ? `#${activeJob.id} via ${activeJob.provider}` : "none"}`,
     `History turns: ${conversationHistory.length}`,
-    `Session file: ${config.sessionFile}`,
+    `Session file: ${config.enableSessionPersistence ? config.sessionFile : "(disabled)"}`,
+    `Session persistence: ${config.enableSessionPersistence ? "enabled" : "disabled"}`,
+    `Prompt log redaction: ${config.redactPromptLogs ? "enabled" : "disabled"}`,
+    `Mutating git commands: ${config.enableMutatingGitCommands ? "enabled" : "disabled"}`,
   ];
   return `Bridge status\n${status.join("\n")}\n\n${formatLimitState()}`;
 }
@@ -828,7 +883,7 @@ async function runPrompt(userPrompt) {
   activeJob = {
     id: startedAt,
     provider: firstProvider,
-    prompt: clip(userPrompt, 80),
+    prompt: promptForLog(userPrompt, 80),
     startedAt,
   };
   refreshNormalPrompt();
@@ -898,7 +953,7 @@ function enqueuePrompt(userPrompt) {
   queueDepth += 1;
   refreshNormalPrompt();
   if (!bot) {
-    console.log(info(`Köad: ${clip(userPrompt, 60)} (queue=${queueDepth})`));
+    console.log(info(`Köad: ${promptForLog(userPrompt, 60)} (queue=${queueDepth})`));
   }
   runQueue = runQueue
     .then(() => runPrompt(userPrompt))
@@ -972,6 +1027,11 @@ async function handleCommand(text, reply) {
   }
 
   if (text.startsWith("/rollback")) {
+    if (!config.enableMutatingGitCommands) {
+      await reply("❌ /rollback är avstängt. Sätt ENABLE_MUTATING_GIT_COMMANDS=true för att tillåta muterande git-kommandon.");
+      return true;
+    }
+
     const targetRaw = text.slice("/rollback".length).trim();
     const target = resolveCheckpointTarget(targetRaw);
     if (!target) {
@@ -1006,6 +1066,11 @@ async function handleCommand(text, reply) {
   }
 
   if (text.startsWith("/commit")) {
+    if (!config.enableMutatingGitCommands) {
+      await reply("❌ /commit är avstängt. Sätt ENABLE_MUTATING_GIT_COMMANDS=true för att tillåta muterande git-kommandon.");
+      return true;
+    }
+
     const message = parseCommitMessage(text);
     if (!message) {
       await reply('❌ Usage: /commit "message"');
@@ -1040,6 +1105,11 @@ async function handleCommand(text, reply) {
   }
 
   if (text.startsWith("/push")) {
+    if (!config.enableMutatingGitCommands) {
+      await reply("❌ /push är avstängt. Sätt ENABLE_MUTATING_GIT_COMMANDS=true för att tillåta muterande git-kommandon.");
+      return true;
+    }
+
     const parts = text.trim().split(/\s+/).filter(Boolean);
     const remote = parts[1] || "origin";
     const branch = parts[2] || "";

@@ -1,0 +1,180 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>getbridgecli.com | Telegram + Terminal AI Bridge</title>
+  <meta name="description" content="Run Claude and Codex from Telegram or terminal with shared memory, risk-aware routing, and automatic fallback." />
+  <meta property="og:title" content="getbridgecli.com" />
+  <meta property="og:description" content="Telegram + terminal AI bridge with shared history, risk guard, and fallback." />
+  <meta property="og:type" content="website" />
+  <meta property="og:url" content="https://getbridgecli.com" />
+  <meta property="og:image" content="./og-image.png" />
+  <meta property="og:image:width" content="1200" />
+  <meta property="og:image:height" content="630" />
+  <meta property="og:image:alt" content="getbridgecli.com preview" />
+  <meta name="twitter:card" content="summary_large_image" />
+  <meta name="twitter:title" content="getbridgecli.com" />
+  <meta name="twitter:description" content="Route work across Claude and Codex without losing context." />
+  <meta name="twitter:image" content="./og-image.png" />
+  <link rel="canonical" href="https://getbridgecli.com/" />
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;500;700&family=IBM+Plex+Mono:wght@400;500&display=swap" rel="stylesheet" />
+  <link rel="stylesheet" href="styles.css" />
+</head>
+<body>
+  <div class="bg-orb orb-a" aria-hidden="true"></div>
+  <div class="bg-orb orb-b" aria-hidden="true"></div>
+
+  <header class="topbar">
+    <div class="brand-wrap">
+      <a class="brand" href="#top">getbridgecli.com</a>
+      <span class="page-badge">Landing page</span>
+    </div>
+    <div class="whereami" id="whereami">You are here: Top</div>
+    <nav>
+      <a href="#features">Features</a>
+      <a href="#demo">Demo</a>
+      <a href="#quickstart">Quickstart</a>
+      <a href="#faq">FAQ</a>
+      <a class="nav-cta" href="https://github.com/berg8201/claude-telegram-bridge" target="_blank" rel="noreferrer">View on GitHub</a>
+    </nav>
+  </header>
+
+  <main id="top">
+    <section class="hero reveal">
+      <p class="eyebrow">For developers running AI workflows from Telegram + terminal</p>
+      <h1>Ship longer sessions without quota interruptions.</h1>
+      <p class="lead">
+        Keep one running context while you switch between Claude and Codex. Auto-fallback and risk guard reduce dead stops when limits hit.
+      </p>
+      <div class="hero-cta">
+        <a class="btn btn-primary" href="#quickstart">Get started</a>
+        <a class="btn btn-ghost" href="https://github.com/berg8201/claude-telegram-bridge" target="_blank" rel="noreferrer">View on GitHub</a>
+      </div>
+      <ul class="proof-strip" aria-label="Core proof points">
+        <li><strong>3 modes</strong><span>normal, passthrough, telegram</span></li>
+        <li><strong>2 providers</strong><span>Claude + Codex routing</span></li>
+        <li><strong>1 shared memory</strong><span>persisted history + summary</span></li>
+      </ul>
+    </section>
+
+    <section id="demo" class="section reveal">
+      <h2>See the flow before install</h2>
+      <div class="demo-wrap">
+        <article class="terminal-card">
+          <p class="window-title">Terminal</p>
+          <pre><code>$ bridge telegram
+[bridge] provider: claude
+[bridge] risk: medium, fallback-ready
+[telegram] /provider codex
+[bridge] switched provider -> codex</code></pre>
+        </article>
+        <article class="chat-card">
+          <p class="window-title">Telegram</p>
+          <div class="bubble bubble-user">/status</div>
+          <div class="bubble bubble-bot">Mode: telegram · Provider: claude · Queue: idle</div>
+          <div class="bubble bubble-user">Ship release notes and push</div>
+          <div class="bubble bubble-bot">Risk guard: high for claude. Auto-routing to codex.</div>
+        </article>
+      </div>
+    </section>
+
+    <section id="features" class="section reveal">
+      <h2>Built for uninterrupted sessions</h2>
+      <div class="grid">
+        <article class="card">
+          <h3>Shared Conversation Memory</h3>
+          <p>Context and rolling summary persist across restarts and provider switches.</p>
+        </article>
+        <article class="card">
+          <h3>Automatic Fallback</h3>
+          <p>When Claude hits limit/rate issues, handoff to Codex can happen automatically.</p>
+        </article>
+        <article class="card">
+          <h3>Risk Guard</h3>
+          <p>Estimate high-risk prompts and pre-route heavy jobs before they fail mid-task.</p>
+        </article>
+        <article class="card">
+          <h3>Telegram Control Plane</h3>
+          <p>Run prompts, inspect status, and execute Git helper commands directly from chat.</p>
+        </article>
+      </div>
+    </section>
+
+    <section id="quickstart" class="section reveal">
+      <h2>Quickstart</h2>
+      <p class="quickstart-note">
+        Requirements: Node.js 18+, <code>claude</code> CLI in PATH, <code>codex</code> CLI in PATH (for fallback/routing), and a Telegram bot token + chat ID.
+      </p>
+      <div class="steps">
+        <article class="step">
+          <p class="step-label">1. Clone and install</p>
+          <pre><code id="cmd-install">git clone https://github.com/berg8201/claude-telegram-bridge.git
+cd claude-telegram-bridge
+npm install && npm link
+npm run hooks:install</code></pre>
+          <button class="copy-btn" data-copy-target="cmd-install">Copy command</button>
+        </article>
+        <article class="step">
+          <p class="step-label">2. Configure env</p>
+          <pre><code id="cmd-env">mkdir -p ~/.config/bridge
+cp .env.example ~/.config/bridge/.env
+# Then edit ~/.config/bridge/.env and set:
+# BOT_TOKEN=...
+# CHAT_ID=...</code></pre>
+          <button class="copy-btn" data-copy-target="cmd-env">Copy command</button>
+        </article>
+        <article class="step">
+          <p class="step-label">3. Start Telegram mode</p>
+          <pre><code id="cmd-run">bridge telegram
+# In Telegram, run:
+/doctor</code></pre>
+          <button class="copy-btn" data-copy-target="cmd-run">Copy command</button>
+        </article>
+      </div>
+      <p class="hint">If you only want terminal mode first, run <code>bridge normal</code> instead.</p>
+    </section>
+
+    <section id="faq" class="section reveal">
+      <h2>FAQ</h2>
+      <div class="faq-list">
+        <article>
+          <h3>Is this for teams or solo developers?</h3>
+          <p>Both. Most users start solo, then share the same workflow pattern across projects.</p>
+        </article>
+        <article>
+          <h3>Does it replace Claude or Codex CLIs?</h3>
+          <p>No. It orchestrates them and adds routing, memory, and Telegram control around your existing tools.</p>
+        </article>
+        <article>
+          <h3>How does fallback work?</h3>
+          <p>When enabled, limit/rate events trigger switch logic from primary provider to fallback provider.</p>
+        </article>
+        <article>
+          <h3>Is chat data persisted?</h3>
+          <p>Yes. Session history and summary are persisted in a session file across restarts.</p>
+        </article>
+      </div>
+    </section>
+
+    <section class="section final-cta reveal">
+      <h2>Ready to run your first bridged session?</h2>
+      <p>Install once, then control AI tasks from terminal or Telegram with one context.</p>
+      <div class="hero-cta">
+        <a class="btn btn-primary" href="#quickstart">Get started</a>
+        <a class="btn btn-ghost" href="https://github.com/berg8201/claude-telegram-bridge" target="_blank" rel="noreferrer">View on GitHub</a>
+      </div>
+    </section>
+  </main>
+
+  <a class="mobile-sticky-cta" href="#quickstart">Get started</a>
+
+  <footer class="footer reveal">
+    <p>MIT Licensed · Built for practical CLI workflows.</p>
+  </footer>
+
+  <script src="script.js"></script>
+</body>
+</html>

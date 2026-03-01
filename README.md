@@ -49,6 +49,9 @@ FALLBACK_PROVIDER=codex
 ENABLE_AUTO_FALLBACK=true
 ENABLE_RISK_GUARD=true
 AUTO_ROUTE_HIGH_RISK=true
+ENABLE_SESSION_PERSISTENCE=true
+REDACT_PROMPT_LOGS=true
+ENABLE_MUTATING_GIT_COMMANDS=false
 RISK_HIGH_PROMPT_CHARS=1200
 RISK_HIGH_HISTORY_TURNS=8
 RISK_LIMIT_WINDOW_MINUTES=180
@@ -78,6 +81,9 @@ cp /path/to/claude-telegram-bridge/config.example.json ~/.config/bridge/config.j
   "enableAutoFallback": true,
   "enableRiskGuard": true,
   "autoRouteHighRisk": true,
+  "enableSessionPersistence": true,
+  "redactPromptLogs": true,
+  "enableMutatingGitCommands": false,
   "riskHighPromptChars": 1200,
   "riskHighHistoryTurns": 8,
   "riskLimitWindowMinutes": 180,
@@ -100,6 +106,9 @@ cp /path/to/claude-telegram-bridge/config.example.json ~/.config/bridge/config.j
 | `enableAutoFallback` | `true`/`false`, auto Claude -> fallback on quota/rate-limit |
 | `enableRiskGuard` | Enables preflight risk warnings based on recent limit events + job size |
 | `autoRouteHighRisk` | Auto-routes medium/high risk jobs to fallback provider when risk guard triggers |
+| `enableSessionPersistence` | Persists session history/summary to session file (`true`/`false`) |
+| `redactPromptLogs` | Redacts prompt text in local terminal logs (`true`/`false`) |
+| `enableMutatingGitCommands` | Enables `/commit`, `/push`, `/rollback` bridge commands (default `false`) |
 | `riskHighPromptChars` | Prompt length threshold used by risk guard |
 | `riskHighHistoryTurns` | Recent context turns threshold used by risk guard |
 | `riskLimitWindowMinutes` | How long a detected limit event keeps provider in high-risk state |
@@ -155,14 +164,14 @@ bridge telegram
 - `/doctor` runs quick health checks (git, providers, hook, Telegram config/API).
 - `/checkpoint [name]` saves a checkpoint at current HEAD.
 - `/checkpoints` lists recent checkpoints.
-- `/rollback [id|name|sha]` switches to a new rollback branch at checkpoint target.
-- `/commit "message"` runs `git add -A` and `git commit -m`.
+- `/rollback [id|name|sha]` switches to a new rollback branch at checkpoint target (requires `ENABLE_MUTATING_GIT_COMMANDS=true`).
+- `/commit "message"` runs `git add -A` and `git commit -m` (requires `ENABLE_MUTATING_GIT_COMMANDS=true`).
 - `/provider` shows active provider.
 - `/provider claude` switches to Claude.
 - `/provider codex` switches to Codex.
 - `/risk` shows provider risk/limit status plus estimated remaining capacity (heuristic, not official quota).
 - `/summary` shows the running persisted summary that is shared across providers.
-- `/push [remote] [branch]` runs `git push` from current project.
+- `/push [remote] [branch]` runs `git push` from current project (requires `ENABLE_MUTATING_GIT_COMMANDS=true`).
 - `/clear` clears in-memory conversation history.
 
 ## Notes
@@ -170,6 +179,18 @@ bridge telegram
 - `bridge normal` prioritizes reliability (shared history + auto-fallback), not full provider TUI rendering.
 - `bridge passthrough` prioritizes original CLI experience and forwards arguments directly to provider command.
 - Session history and summary persist across restarts in a per-project session file (or `SESSION_FILE` if explicitly set).
+
+## Security Baseline
+
+Recommended defaults for safer operation:
+
+- Keep `ENABLE_MUTATING_GIT_COMMANDS=false` unless you explicitly want Telegram-triggered git write operations.
+- Keep `REDACT_PROMPT_LOGS=true` to avoid printing raw prompt content to local terminal logs.
+- Set `ENABLE_SESSION_PERSISTENCE=false` for no on-disk prompt/response history.
+- Use a dedicated Telegram bot token for bridge only, and rotate token on any suspected leak.
+- Restrict server/network access and store `.env` with least privilege.
+
+For an actionable deployment checklist, see `SECURITY_AND_COMPLIANCE.md`.
 
 ### Replying from Telegram
 
@@ -183,3 +204,22 @@ After running `npm run hooks:install`, each successful `git push` in this repo s
 ## License
 
 MIT
+
+## Landing Page (draft)
+
+A starter landing page is available in `landing/`.
+
+Open it directly:
+
+```bash
+xdg-open landing/index.html
+```
+
+Run it as a Docker image:
+
+```bash
+docker build -t bridge-landing ./landing
+docker run --rm -p 8080:80 bridge-landing
+```
+
+Then open `http://localhost:8080`.

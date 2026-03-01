@@ -1,0 +1,48 @@
+<svg width="1200" height="630" viewBox="0 0 1200 630" fill="none" xmlns="http://www.w3.org/2000/svg">
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="1200" y2="630" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#FFF8EA"/>
+      <stop offset="1" stop-color="#EFE7DA"/>
+    </linearGradient>
+    <linearGradient id="accent" x1="180" y1="140" x2="980" y2="500" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#DC5F3F"/>
+      <stop offset="1" stop-color="#178582"/>
+    </linearGradient>
+    <filter id="blur" x="-200" y="-200" width="1600" height="1030" filterUnits="userSpaceOnUse" color-interpolation-filters="sRGB">
+      <feGaussianBlur stdDeviation="48"/>
+    </filter>
+  </defs>
+
+  <rect width="1200" height="630" fill="url(#bg)"/>
+
+  <g filter="url(#blur)" opacity="0.5">
+    <circle cx="1020" cy="70" r="140" fill="#FFD166"/>
+    <circle cx="120" cy="560" r="120" fill="#70D6C7"/>
+  </g>
+
+  <rect x="72" y="72" width="1056" height="486" rx="28" fill="#FFFDF8" stroke="#D8D2C7" stroke-width="2"/>
+
+  <text x="120" y="166" fill="#151515" font-family="Space Grotesk, Arial, sans-serif" font-size="66" font-weight="700">
+    getbridgecli.com
+  </text>
+  <text x="120" y="228" fill="#434343" font-family="Space Grotesk, Arial, sans-serif" font-size="34" font-weight="500">
+    Telegram + Terminal AI orchestration
+  </text>
+
+  <rect x="120" y="280" width="430" height="170" rx="16" fill="#FFFFFF" stroke="#D8D2C7"/>
+  <text x="148" y="320" fill="#151515" font-family="IBM Plex Mono, monospace" font-size="24">$ bridge telegram</text>
+  <text x="148" y="356" fill="#515151" font-family="IBM Plex Mono, monospace" font-size="20">provider: claude</text>
+  <text x="148" y="389" fill="#515151" font-family="IBM Plex Mono, monospace" font-size="20">risk: medium</text>
+  <text x="148" y="422" fill="#515151" font-family="IBM Plex Mono, monospace" font-size="20">fallback: codex ready</text>
+
+  <rect x="590" y="280" width="490" height="170" rx="16" fill="#FFFFFF" stroke="#D8D2C7"/>
+  <rect x="616" y="310" width="196" height="38" rx="10" fill="#1F1F1F"/>
+  <text x="636" y="336" fill="#FFFFFF" font-family="Space Grotesk, Arial, sans-serif" font-size="20">/status</text>
+  <rect x="616" y="360" width="442" height="64" rx="10" fill="#ECE8E0"/>
+  <text x="636" y="390" fill="#222222" font-family="Space Grotesk, Arial, sans-serif" font-size="18">Mode: telegram · Provider: claude · Queue: idle</text>
+
+  <rect x="120" y="486" width="520" height="42" rx="21" fill="url(#accent)"/>
+  <text x="146" y="513" fill="#FFFFFF" font-family="Space Grotesk, Arial, sans-serif" font-size="22" font-weight="700">
+    Shared memory · Risk guard · Auto fallback
+  </text>
+</svg>
