@@ -1,5 +1,19 @@
 {
   "botToken": "YOUR_TELEGRAM_BOT_TOKEN",
   "chatId": "YOUR_TELEGRAM_CHAT_ID",
-  "timeoutSeconds": 30
+  "primaryProvider": "claude",
+  "fallbackProvider": "codex",
+  "enableAutoFallback": true,
+  "enableRiskGuard": true,
+  "autoRouteHighRisk": true,
+  "riskHighPromptChars": 1200,
+  "riskHighHistoryTurns": 8,
+  "riskLimitWindowMinutes": 180,
+  "historyWindow": 12,
+  "summaryMaxTurns": 30,
+  "summaryMaxChars": 3500,
+  "claudeCommand": "claude",
+  "codexCommand": "codex",
+  "claudeArgs": "--print",
+  "codexArgs": "exec -"
 }

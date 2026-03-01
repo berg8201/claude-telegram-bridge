@@ -1,19 +1,20 @@
 #!/usr/bin/env node
 
 const { spawn } = require("child_process");
+const crypto = require("crypto");
 const fs = require("fs");
+const os = require("os");
+const path = require("path");
 const readline = require("readline");
 const TelegramBot = require("node-telegram-bot-api");
 
-function loadDotEnv() {
-  const envPath = "./.env";
+function loadDotEnvFile(envPath, overwrite = false) {
   if (!fs.existsSync(envPath)) return;
-
   let content = "";
   try {
     content = fs.readFileSync(envPath, "utf8");
   } catch (error) {
-    console.error(`[bridge] Kunde inte läsa .env: ${error.message}`);
+    console.error(`[bridge] Kunde inte läsa env-fil (${envPath}): ${error.message}`);
     process.exit(1);
   }
 
@@ -34,56 +35,301 @@ function loadDotEnv() {
       value = value.slice(1, -1);
     }
 
-    if (!(key in process.env)) {
+    if (overwrite || !(key in process.env)) {
       process.env[key] = value;
     }
   }
 }
 
-function loadConfig() {
-  let fileConfig = {};
+function bridgeHomeDir() {
+  return process.env.BRIDGE_HOME || path.join(os.homedir(), ".config", "bridge");
+}
 
-  if (fs.existsSync("./config.json")) {
-    try {
-      fileConfig = require("./config.json");
-    } catch (error) {
-      console.error(`[bridge] Kunde inte läsa config.json: ${error.message}`);
-      process.exit(1);
-    }
+function projectSessionFileDefault() {
+  const cwd = process.cwd();
+  const projectName = path.basename(cwd) || "workspace";
+  const safeProjectName = projectName.replace(/[^a-zA-Z0-9._-]/g, "_");
+  const cwdHash = crypto.createHash("sha1").update(cwd).digest("hex").slice(0, 12);
+  return path.join(bridgeHomeDir(), "sessions", `${safeProjectName}-${cwdHash}.json`);
+}
+
+function ensureParentDir(filePath) {
+  const dir = path.dirname(filePath);
+  fs.mkdirSync(dir, { recursive: true });
+}
+
+function loadDotEnv() {
+  const homeDir = bridgeHomeDir();
+  const globalEnv = path.join(homeDir, ".env");
+  const localEnv = path.join(process.cwd(), ".env");
+  loadDotEnvFile(globalEnv, false);
+  loadDotEnvFile(localEnv, true);
+}
+
+function normalizeProvider(value) {
+  return (value || "").trim().toLowerCase();
+}
+
+function parseCliArgs() {
+  const args = process.argv.slice(2);
+  const knownModes = ["normal", "telegram", "passthrough", "passthru"];
+
+  if (args.length === 0) {
+    return { mode: "normal", rest: [] };
   }
+
+  const first = (args[0] || "").toLowerCase();
+  if (knownModes.includes(first)) {
+    const mappedMode = first === "passthru" ? "passthrough" : first;
+    return { mode: mappedMode, rest: args.slice(1) };
+  }
+
+  return { mode: "normal", rest: args };
+}
+
+function loadConfig(mode) {
+  const homeDir = bridgeHomeDir();
+  const globalConfigPath = path.join(homeDir, "config.json");
+  const localConfigPath = path.join(process.cwd(), "config.json");
+  const globalConfig = safeReadJson(globalConfigPath, {});
+  const localConfig = safeReadJson(localConfigPath, {});
+  const fileConfig = { ...globalConfig, ...localConfig };
 
   const config = {
     botToken: process.env.BOT_TOKEN || fileConfig.botToken,
     chatId: process.env.CHAT_ID || fileConfig.chatId,
-    timeoutSeconds: Number(process.env.TIMEOUT_SECONDS || fileConfig.timeoutSeconds || 30),
+    primaryProvider:
+      (process.env.PRIMARY_PROVIDER || fileConfig.primaryProvider || "claude").toLowerCase(),
+    fallbackProvider:
+      (process.env.FALLBACK_PROVIDER || fileConfig.fallbackProvider || "codex").toLowerCase(),
+    enableAutoFallback:
+      String(process.env.ENABLE_AUTO_FALLBACK || fileConfig.enableAutoFallback || "true")
+        .toLowerCase() !== "false",
+    historyWindow: Number(process.env.HISTORY_WINDOW || fileConfig.historyWindow || 12),
+    claudeCommand: process.env.CLAUDE_COMMAND || fileConfig.claudeCommand || "claude",
+    codexCommand: process.env.CODEX_COMMAND || fileConfig.codexCommand || "codex",
+    claudeArgs: process.env.CLAUDE_ARGS || fileConfig.claudeArgs || "--print",
+    codexArgs: process.env.CODEX_ARGS || fileConfig.codexArgs || "exec -",
+    sessionFile:
+      process.env.SESSION_FILE ||
+      fileConfig.sessionFile ||
+      projectSessionFileDefault(),
+    summaryMaxTurns: Number(process.env.SUMMARY_MAX_TURNS || fileConfig.summaryMaxTurns || 30),
+    summaryMaxChars: Number(process.env.SUMMARY_MAX_CHARS || fileConfig.summaryMaxChars || 3500),
+    enableRiskGuard:
+      String(process.env.ENABLE_RISK_GUARD || fileConfig.enableRiskGuard || "true").toLowerCase() !==
+      "false",
+    riskHighPromptChars: Number(
+      process.env.RISK_HIGH_PROMPT_CHARS || fileConfig.riskHighPromptChars || 1200
+    ),
+    riskHighHistoryTurns: Number(
+      process.env.RISK_HIGH_HISTORY_TURNS || fileConfig.riskHighHistoryTurns || 8
+    ),
+    riskLimitWindowMinutes: Number(
+      process.env.RISK_LIMIT_WINDOW_MINUTES || fileConfig.riskLimitWindowMinutes || 180
+    ),
+    autoRouteHighRisk:
+      String(process.env.AUTO_ROUTE_HIGH_RISK || fileConfig.autoRouteHighRisk || "true")
+        .toLowerCase() !== "false",
   };
 
-  if (!config.botToken) {
-    console.error("[bridge] Saknar bot-token. Sätt BOT_TOKEN eller config.json.botToken.");
+  if (!["claude", "codex"].includes(config.primaryProvider)) {
+    console.error("[bridge] PRIMARY_PROVIDER måste vara 'claude' eller 'codex'.");
     process.exit(1);
   }
 
-  if (!config.chatId) {
-    console.error("[bridge] Saknar chat-id. Sätt CHAT_ID eller config.json.chatId.");
+  if (!["claude", "codex"].includes(config.fallbackProvider)) {
+    console.error("[bridge] FALLBACK_PROVIDER måste vara 'claude' eller 'codex'.");
     process.exit(1);
+  }
+
+  if (config.historyWindow < 0 || Number.isNaN(config.historyWindow)) {
+    console.error("[bridge] HISTORY_WINDOW måste vara 0 eller större.");
+    process.exit(1);
+  }
+
+  if (config.summaryMaxTurns < 1 || Number.isNaN(config.summaryMaxTurns)) {
+    console.error("[bridge] SUMMARY_MAX_TURNS måste vara 1 eller större.");
+    process.exit(1);
+  }
+
+  if (config.summaryMaxChars < 200 || Number.isNaN(config.summaryMaxChars)) {
+    console.error("[bridge] SUMMARY_MAX_CHARS måste vara minst 200.");
+    process.exit(1);
+  }
+
+  if (config.riskHighPromptChars < 1 || Number.isNaN(config.riskHighPromptChars)) {
+    console.error("[bridge] RISK_HIGH_PROMPT_CHARS måste vara 1 eller större.");
+    process.exit(1);
+  }
+
+  if (config.riskHighHistoryTurns < 0 || Number.isNaN(config.riskHighHistoryTurns)) {
+    console.error("[bridge] RISK_HIGH_HISTORY_TURNS måste vara 0 eller större.");
+    process.exit(1);
+  }
+
+  if (config.riskLimitWindowMinutes < 1 || Number.isNaN(config.riskLimitWindowMinutes)) {
+    console.error("[bridge] RISK_LIMIT_WINDOW_MINUTES måste vara 1 eller större.");
+    process.exit(1);
+  }
+
+  if (!path.isAbsolute(config.sessionFile)) {
+    config.sessionFile = path.join(homeDir, config.sessionFile);
+  }
+
+  ensureParentDir(config.sessionFile);
+
+  if (mode === "telegram") {
+    if (!config.botToken) {
+      console.error("[bridge] Saknar bot-token. Sätt BOT_TOKEN eller config.json.botToken.");
+      process.exit(1);
+    }
+
+    if (!config.chatId) {
+      console.error("[bridge] Saknar chat-id. Sätt CHAT_ID eller config.json.chatId.");
+      process.exit(1);
+    }
   }
 
   return config;
 }
 
+function safeReadJson(filePath, fallbackValue) {
+  if (!fs.existsSync(filePath)) return fallbackValue;
+  try {
+    return JSON.parse(fs.readFileSync(filePath, "utf8"));
+  } catch (error) {
+    console.error(`[bridge] Kunde inte läsa ${filePath}: ${error.message}`);
+    return fallbackValue;
+  }
+}
+
 loadDotEnv();
-const config = loadConfig();
+const cli = parseCliArgs();
+const config = loadConfig(cli.mode);
 
-const bot = new TelegramBot(config.botToken, { polling: true });
+function loadSessionState() {
+  const initialState = {
+    summary: "",
+    history: [],
+    limitState: {},
+    updatedAt: null,
+  };
 
-const conversationHistory = [];
+  const state = safeReadJson(config.sessionFile, initialState);
+  if (!state || typeof state !== "object") return initialState;
+  if (!Array.isArray(state.history)) state.history = [];
+  if (typeof state.summary !== "string") state.summary = "";
+  if (!state.limitState || typeof state.limitState !== "object") state.limitState = {};
+  return state;
+}
 
-function buildPromptWithHistory(newPrompt) {
-  if (conversationHistory.length === 0) return newPrompt;
-  const historyText = conversationHistory
-    .map((entry) => `User: ${entry.user}\nAssistant: ${entry.assistant}`)
-    .join("\n\n");
-  return `Previous conversation:\n${historyText}\n\nUser: ${newPrompt}`;
+function saveSessionState() {
+  const payload = JSON.stringify(
+    {
+      summary: runningSummary,
+      history: conversationHistory,
+      limitState: providerLimitState,
+      updatedAt: new Date().toISOString(),
+    },
+    null,
+    2
+  );
+
+  try {
+    ensureParentDir(config.sessionFile);
+    const tmpPath = `${config.sessionFile}.tmp`;
+    fs.writeFileSync(tmpPath, payload, "utf8");
+    fs.renameSync(tmpPath, config.sessionFile);
+  } catch (error) {
+    console.error(`[bridge] Kunde inte spara session (${config.sessionFile}): ${error.message}`);
+  }
+}
+
+function clip(text, maxLen) {
+  const str = String(text || "");
+  return str.length <= maxLen ? str : `${str.slice(0, maxLen)}...`;
+}
+
+function refreshSummary() {
+  const windowed = conversationHistory.slice(-config.summaryMaxTurns);
+  if (windowed.length === 0) {
+    runningSummary = "";
+    return;
+  }
+
+  const lines = windowed.map((entry, idx) => {
+    const userText = clip(entry.user, 120).replace(/\s+/g, " ");
+    const assistantText = clip(entry.assistant, 200).replace(/\s+/g, " ");
+    return `${idx + 1}. [${entry.provider}] U: ${userText} | A: ${assistantText}`;
+  });
+
+  let summary = `Recent session summary (${windowed.length} turns):\n${lines.join("\n")}`;
+  if (summary.length > config.summaryMaxChars) {
+    summary = summary.slice(summary.length - config.summaryMaxChars);
+  }
+  runningSummary = summary;
+}
+
+function buildContextPacket(newPrompt) {
+  const windowSize = config.historyWindow;
+  const windowedHistory =
+    windowSize === 0 ? [] : conversationHistory.slice(-windowSize);
+
+  const historyText =
+    windowedHistory.length === 0
+      ? "(no recent turns)"
+      : windowedHistory
+          .map(
+            (entry, idx) =>
+              `Turn ${idx + 1} [${entry.provider}]\nUser: ${entry.user}\nAssistant: ${entry.assistant}`
+          )
+          .join("\n\n");
+
+  const summaryText = runningSummary || "(no summary yet)";
+  return [
+    "You are continuing an existing cross-provider conversation.",
+    "Use the summary and recent turns as source of truth for context.",
+    "",
+    "Session summary:",
+    summaryText,
+    "",
+    "Recent turns:",
+    historyText,
+    "",
+    `Current user prompt:\n${newPrompt}`,
+  ].join("\n");
+}
+
+const sessionState = loadSessionState();
+const conversationHistory = sessionState.history;
+let runningSummary = sessionState.summary || "";
+let providerLimitState = sessionState.limitState || {};
+if (!runningSummary && conversationHistory.length > 0) {
+  refreshSummary();
+}
+let currentProvider = config.primaryProvider;
+let runQueue = Promise.resolve();
+let bot = null;
+
+const providers = {
+  claude: {
+    command: config.claudeCommand,
+    args: config.claudeArgs.split(/\s+/).filter(Boolean),
+  },
+  codex: {
+    command: config.codexCommand,
+    args: config.codexArgs.split(/\s+/).filter(Boolean),
+  },
+};
+
+function setProvider(providerName) {
+  const provider = normalizeProvider(providerName);
+  if (!providers[provider]) {
+    return { ok: false, message: "Ogiltig provider. Använd 'claude' eller 'codex'." };
+  }
+  currentProvider = provider;
+  return { ok: true, message: `Aktiv provider: ${currentProvider}` };
 }
 
 function stripAnsi(str) {
@@ -93,69 +339,349 @@ function stripAnsi(str) {
   );
 }
 
-function runClaudeWithPrompt(userPrompt) {
-  console.log(`[bridge] Kör Claude med prompt: ${userPrompt}`);
+function isQuotaOrRateLimitError(text) {
+  return /(rate\W*limit|quota|insufficient|credits?|usage\W*limit|too\W*many\W*requests|token\W*limit|hit\W+your\W+limit|resets?\W+\d)/i.test(
+    text || ""
+  );
+}
 
-  const fullPrompt = buildPromptWithHistory(userPrompt);
+function getOtherProvider(providerName) {
+  return providerName === "claude" ? "codex" : "claude";
+}
 
-  const claudeProcess = spawn("claude", ["--print"], {
-    stdio: ["pipe", "pipe", "pipe"],
-    env: process.env,
+function getFallbackProvider(failedProvider) {
+  if (config.fallbackProvider && config.fallbackProvider !== failedProvider) {
+    return config.fallbackProvider;
+  }
+  return getOtherProvider(failedProvider);
+}
+
+function getLimitEntry(providerName) {
+  return providerLimitState[providerName] || null;
+}
+
+function setLimitEntry(providerName, errorText) {
+  providerLimitState[providerName] = {
+    detectedAt: new Date().toISOString(),
+    errorText: clip(errorText, 300),
+  };
+  saveSessionState();
+}
+
+function clearLimitEntry(providerName) {
+  if (!providerLimitState[providerName]) return;
+  delete providerLimitState[providerName];
+  saveSessionState();
+}
+
+function isProviderRecentlyLimited(providerName) {
+  const entry = getLimitEntry(providerName);
+  if (!entry || !entry.detectedAt) return false;
+  const detectedTs = Date.parse(entry.detectedAt);
+  if (Number.isNaN(detectedTs)) return false;
+  const limitWindowMs = config.riskLimitWindowMinutes * 60 * 1000;
+  return Date.now() - detectedTs <= limitWindowMs;
+}
+
+function classifyPromptRisk(userPrompt) {
+  const promptChars = String(userPrompt || "").length;
+  const recentTurns = conversationHistory.slice(-config.historyWindow).length;
+  const summaryChars = runningSummary.length;
+  const score =
+    (promptChars >= config.riskHighPromptChars ? 2 : 0) +
+    (recentTurns >= config.riskHighHistoryTurns ? 1 : 0) +
+    (summaryChars > config.summaryMaxChars * 0.8 ? 1 : 0);
+  const level = score >= 3 ? "high" : score >= 1 ? "medium" : "low";
+  return { level, promptChars, recentTurns, summaryChars };
+}
+
+function preflightRoute(userPrompt, providerName) {
+  if (!config.enableRiskGuard) {
+    return { routeProvider: providerName, warning: null };
+  }
+
+  const risk = classifyPromptRisk(userPrompt);
+  const recentlyLimited = isProviderRecentlyLimited(providerName);
+  if (!recentlyLimited) {
+    return { routeProvider: providerName, warning: null };
+  }
+
+  const fallbackProvider = getFallbackProvider(providerName);
+  const warning = `⚠️ Riskvakt: ${providerName} nådde nyligen limit. Jobbstorlek=${risk.level} (prompt=${risk.promptChars} chars, turns=${risk.recentTurns}).`;
+  const shouldRoute =
+    config.enableAutoFallback &&
+    config.autoRouteHighRisk &&
+    risk.level !== "low" &&
+    fallbackProvider !== providerName;
+
+  if (!shouldRoute) {
+    return { routeProvider: providerName, warning };
+  }
+
+  return {
+    routeProvider: fallbackProvider,
+    warning: `${warning} Routar till ${fallbackProvider} för att minska risk för avbrott.`,
+  };
+}
+
+function formatLimitState() {
+  const providersList = ["claude", "codex"];
+  const rows = providersList.map((providerName) => {
+    const entry = getLimitEntry(providerName);
+    if (!entry) return `${providerName}: ok`;
+    const recent = isProviderRecentlyLimited(providerName) ? "recent-limit" : "old-limit";
+    return `${providerName}: ${recent} @ ${entry.detectedAt}`;
   });
+  return `Riskstatus\n${rows.join("\n")}`;
+}
 
-  let outputBuffer = "";
+async function notifyUser(message) {
+  if (bot) {
+    await bot.sendMessage(config.chatId, message);
+    return;
+  }
+  console.log(message);
+}
 
-  claudeProcess.stdin.write(fullPrompt);
-  claudeProcess.stdin.end();
+function runProviderWithPrompt(providerName, fullPrompt) {
+  return new Promise((resolve) => {
+    const provider = providers[providerName];
+    console.log(`[bridge] Kör ${providerName} med kommando: ${provider.command} ${provider.args.join(" ")}`);
 
-  claudeProcess.stdout.on("data", (data) => {
-    process.stdout.write(data);
-    outputBuffer += stripAnsi(data.toString());
-  });
+    const child = spawn(provider.command, provider.args, {
+      stdio: ["pipe", "pipe", "pipe"],
+      env: process.env,
+    });
 
-  claudeProcess.stderr.on("data", (data) => {
-    process.stderr.write(data);
-  });
+    let outputBuffer = "";
+    let errorBuffer = "";
+    let spawnError = null;
 
-  claudeProcess.on("close", (code) => {
-    console.log(`\n[bridge] Claude Code avslutades med kod ${code}`);
-    const response = outputBuffer.trim();
-    if (response) {
-      conversationHistory.push({ user: userPrompt, assistant: response });
-      const truncated = response.length > 4000 ? response.slice(-4000) : response;
-      bot.sendMessage(config.chatId, truncated);
-    }
+    child.stdin.write(fullPrompt);
+    child.stdin.end();
+
+    child.stdout.on("data", (data) => {
+      process.stdout.write(data);
+      outputBuffer += stripAnsi(data.toString());
+    });
+
+    child.stderr.on("data", (data) => {
+      process.stderr.write(data);
+      errorBuffer += stripAnsi(data.toString());
+    });
+
+    child.on("error", (error) => {
+      spawnError = error;
+    });
+
+    child.on("close", (code) => {
+      console.log(`\n[bridge] ${providerName} avslutades med kod ${code}`);
+      resolve({
+        provider: providerName,
+        ok: code === 0 && !spawnError,
+        code,
+        response: outputBuffer.trim(),
+        errorText: `${errorBuffer}\n${spawnError ? spawnError.message : ""}`.trim(),
+      });
+    });
   });
 }
 
-function startClaude() {
+async function runPrompt(userPrompt) {
+  const preflight = preflightRoute(userPrompt, currentProvider);
+  if (preflight.warning) {
+    await notifyUser(preflight.warning);
+  }
+
+  const fullPrompt = buildContextPacket(userPrompt);
+  const firstProvider = preflight.routeProvider;
+  let result = await runProviderWithPrompt(firstProvider, fullPrompt);
+  const firstErrorText = result.errorText || result.response || "";
+
+  const shouldFallback =
+    config.enableAutoFallback &&
+    !result.ok &&
+    isQuotaOrRateLimitError(firstErrorText);
+
+  if (!result.ok && isQuotaOrRateLimitError(firstErrorText)) {
+    setLimitEntry(firstProvider, firstErrorText);
+  }
+
+  if (shouldFallback) {
+    const fallbackProvider = getFallbackProvider(firstProvider);
+    console.log(`[bridge] Växlar till fallback-provider: ${fallbackProvider}`);
+    await notifyUser(`⚠️ ${firstProvider} nådde begränsning. Växlar till ${fallbackProvider}.`);
+    result = await runProviderWithPrompt(fallbackProvider, fullPrompt);
+    const fallbackErrorText = result.errorText || result.response || "";
+    if (!result.ok && isQuotaOrRateLimitError(fallbackErrorText)) {
+      setLimitEntry(fallbackProvider, fallbackErrorText);
+    }
+  }
+
+  if (!result.ok) {
+    const errorMessage = result.errorText || `Ingen output (exit code ${result.code})`;
+    await notifyUser(`❌ Körning misslyckades i ${result.provider}:\n${errorMessage.slice(0, 3500)}`);
+    return;
+  }
+
+  const response = result.response || "(tomt svar)";
+  clearLimitEntry(result.provider);
+  conversationHistory.push({
+    provider: result.provider,
+    user: userPrompt,
+    assistant: response,
+    ts: new Date().toISOString(),
+  });
+  refreshSummary();
+  saveSessionState();
+  const truncated = response.length > 3900 ? response.slice(-3900) : response;
+  await notifyUser(`[${result.provider}]\n${truncated}`);
+}
+
+function enqueuePrompt(userPrompt) {
+  runQueue = runQueue
+    .then(() => runPrompt(userPrompt))
+    .catch((error) => {
+      console.error(`[bridge] Oväntat fel: ${error.message}`);
+      return notifyUser(`❌ Oväntat fel: ${error.message}`);
+    });
+}
+
+async function handleCommand(text, reply) {
+  if (text === "/clear") {
+    conversationHistory.length = 0;
+    runningSummary = "";
+    saveSessionState();
+    await reply("🧹 Konversationshistorik rensad.");
+    return true;
+  }
+
+  if (text === "/summary") {
+    const msg = runningSummary ? clip(runningSummary, 3800) : "(ingen summary ännu)";
+    await reply(msg);
+    return true;
+  }
+
+  if (text === "/risk") {
+    await reply(formatLimitState());
+    return true;
+  }
+
+  if (text === "/provider") {
+    await reply(`Aktiv provider: ${currentProvider}`);
+    return true;
+  }
+
+  if (text.startsWith("/provider ")) {
+    const requestedProvider = normalizeProvider(text.slice("/provider ".length));
+    const result = setProvider(requestedProvider);
+    await reply(result.ok ? `✅ ${result.message}` : `❌ ${result.message}`);
+    return true;
+  }
+
+  return false;
+}
+
+function startTelegramBridge() {
+  bot = new TelegramBot(config.botToken, { polling: true });
   const rl = readline.createInterface({ input: process.stdin });
 
-  rl.on("line", (line) => {
+  rl.on("line", async (line) => {
     const trimmed = line.trim();
-    if (trimmed) {
-      runClaudeWithPrompt(trimmed);
+    if (!trimmed) return;
+    const handled = await handleCommand(trimmed, async (message) => {
+      console.log(`[bridge] ${message}`);
+    });
+    if (!handled) {
+      enqueuePrompt(trimmed);
     }
   });
 
-  bot.on("message", (msg) => {
+  bot.on("message", async (msg) => {
     if (String(msg.chat.id) !== String(config.chatId)) return;
     const text = (msg.text || "").trim();
     if (!text) return;
-    if (text === "/clear") {
-      conversationHistory.length = 0;
-      bot.sendMessage(config.chatId, "🧹 Konversationshistorik rensad.");
-      return;
+
+    const handled = await handleCommand(text, async (message) => {
+      await bot.sendMessage(config.chatId, message);
+    });
+    if (!handled) {
+      await bot.sendMessage(config.chatId, `✅ Kör med ${currentProvider}: ${text}`);
+      enqueuePrompt(text);
     }
-    bot.sendMessage(config.chatId, `✅ Kör: \`${text}\``, { parse_mode: "Markdown" });
-    runClaudeWithPrompt(text);
+  });
+
+  bot.sendMessage(
+    config.chatId,
+    `🚀 *claude-telegram-bridge* startad!\n\nAktiv provider: *${currentProvider}*\nSkicka text för att köra. Kommandon: /provider, /provider claude, /provider codex, /risk, /summary, /clear`,
+    { parse_mode: "Markdown" }
+  );
+}
+
+function startNormalBridge(rawArgs) {
+  const maybeProvider = normalizeProvider(rawArgs[0]);
+  if (providers[maybeProvider]) {
+    currentProvider = maybeProvider;
+  }
+
+  console.log(
+    `[bridge] Normal mode startad. Aktiv provider: ${currentProvider}. Kommandon: /provider, /provider claude, /provider codex, /risk, /summary, /clear`
+  );
+
+  const rl = readline.createInterface({ input: process.stdin, output: process.stdout });
+  rl.on("line", async (line) => {
+    const trimmed = line.trim();
+    if (!trimmed) return;
+    const handled = await handleCommand(trimmed, async (message) => {
+      console.log(`[bridge] ${message}`);
+    });
+    if (!handled) {
+      enqueuePrompt(trimmed);
+    }
   });
 }
 
-bot.sendMessage(
-  config.chatId,
-  `🚀 *claude-telegram-bridge* startad!\n\nSkicka ett meddelande hit eller skriv i terminalen för att köra Claude Code.`,
-  { parse_mode: "Markdown" }
-);
+function startPassthroughMode(rawArgs) {
+  let providerName = currentProvider;
+  let providerArgs = rawArgs;
+  const maybeProvider = normalizeProvider(rawArgs[0]);
 
-startClaude();
+  if (providers[maybeProvider]) {
+    providerName = maybeProvider;
+    providerArgs = rawArgs.slice(1);
+  }
+
+  const provider = providers[providerName];
+  console.log(
+    `[bridge] Passthrough mode startad. Provider: ${providerName}. Kommando: ${provider.command} ${providerArgs.join(
+      " "
+    )}`.trim()
+  );
+
+  const child = spawn(provider.command, providerArgs, {
+    stdio: "inherit",
+    env: process.env,
+  });
+
+  child.on("error", (error) => {
+    console.error(`[bridge] Kunde inte starta ${providerName}: ${error.message}`);
+    process.exit(1);
+  });
+
+  child.on("exit", (code, signal) => {
+    if (signal) {
+      console.error(`[bridge] ${providerName} avslutades av signal ${signal}`);
+      process.exit(1);
+      return;
+    }
+    process.exit(code ?? 0);
+  });
+}
+
+if (cli.mode === "normal") {
+  startNormalBridge(cli.rest);
+} else if (cli.mode === "passthrough") {
+  startPassthroughMode(cli.rest);
+} else {
+  startTelegramBridge();
+}
