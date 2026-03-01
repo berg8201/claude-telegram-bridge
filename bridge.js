@@ -1174,7 +1174,11 @@ async function handleCommand(text, reply) {
 
 function startTelegramBridge() {
   bot = new TelegramBot(config.botToken, { polling: true });
-  const rl = readline.createInterface({ input: process.stdin });
+  const rl = readline.createInterface({
+    input: process.stdin,
+    historySize: 0,
+    removeHistoryDuplicates: true,
+  });
 
   rl.on("line", async (line) => {
     const trimmed = line.trim();
@@ -1216,7 +1220,12 @@ function startNormalBridge(rawArgs) {
 
   printNormalBanner(currentProvider);
 
-  const rl = readline.createInterface({ input: process.stdin, output: process.stdout });
+  const rl = readline.createInterface({
+    input: process.stdin,
+    output: process.stdout,
+    historySize: 0,
+    removeHistoryDuplicates: true,
+  });
   normalRl = rl;
   refreshNormalPrompt();
   rl.prompt();
