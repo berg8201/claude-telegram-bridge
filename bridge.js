@@ -260,6 +260,7 @@ function loadSessionState() {
     summary: "",
     history: [],
     limitState: {},
+    providerTelemetry: {},
     updatedAt: null,
   };
 
@@ -268,6 +269,9 @@ function loadSessionState() {
   if (!Array.isArray(state.history)) state.history = [];
   if (typeof state.summary !== "string") state.summary = "";
   if (!state.limitState || typeof state.limitState !== "object") state.limitState = {};
+  if (!state.providerTelemetry || typeof state.providerTelemetry !== "object") {
+    state.providerTelemetry = {};
+  }
   return state;
 }
 
@@ -277,6 +281,7 @@ function saveSessionState() {
       summary: runningSummary,
       history: conversationHistory,
       limitState: providerLimitState,
+      providerTelemetry,
       updatedAt: new Date().toISOString(),
     },
     null,
@@ -352,6 +357,7 @@ const sessionState = loadSessionState();
 const conversationHistory = sessionState.history;
 let runningSummary = sessionState.summary || "";
 let providerLimitState = sessionState.limitState || {};
+let providerTelemetry = sessionState.providerTelemetry || {};
 if (!runningSummary && conversationHistory.length > 0) {
   refreshSummary();
 }
@@ -421,6 +427,25 @@ function clearLimitEntry(providerName) {
   saveSessionState();
 }
 
+function recordProviderOutcome(providerName, result, wasLimited) {
+  if (!providerTelemetry[providerName]) {
+    providerTelemetry[providerName] = { outcomes: [] };
+  }
+  const bucket = providerTelemetry[providerName];
+  if (!Array.isArray(bucket.outcomes)) bucket.outcomes = [];
+
+  bucket.outcomes.push({
+    ts: new Date().toISOString(),
+    ok: Boolean(result && result.ok),
+    limited: Boolean(wasLimited),
+  });
+
+  if (bucket.outcomes.length > 40) {
+    bucket.outcomes = bucket.outcomes.slice(-40);
+  }
+  saveSessionState();
+}
+
 function isProviderRecentlyLimited(providerName) {
   const entry = getLimitEntry(providerName);
   if (!entry || !entry.detectedAt) return false;
@@ -475,11 +500,56 @@ function formatLimitState() {
   const providersList = ["claude", "codex"];
   const rows = providersList.map((providerName) => {
     const entry = getLimitEntry(providerName);
-    if (!entry) return `${providerName}: ok`;
+    const est = estimateRemainingPercent(providerName);
+    const estText = `~${est.percent}% kvar (${est.confidence})`;
+    if (!entry) return `${providerName}: ok | ${estText}`;
     const recent = isProviderRecentlyLimited(providerName) ? "recent-limit" : "old-limit";
-    return `${providerName}: ${recent} @ ${entry.detectedAt}`;
+    return `${providerName}: ${recent} @ ${entry.detectedAt} | ${estText}`;
   });
-  return `Riskstatus\n${rows.join("\n")}`;
+  return `Riskstatus (estimat)\n${rows.join("\n")}`;
+}
+
+function clamp(n, min, max) {
+  return Math.max(min, Math.min(max, n));
+}
+
+function estimateRemainingPercent(providerName) {
+  const now = Date.now();
+  let percent = 80;
+  const entry = getLimitEntry(providerName);
+
+  if (entry && entry.detectedAt) {
+    const detectedTs = Date.parse(entry.detectedAt);
+    if (!Number.isNaN(detectedTs)) {
+      const windowMs = config.riskLimitWindowMinutes * 60 * 1000;
+      const elapsed = clamp(now - detectedTs, 0, windowMs);
+      const recovery = elapsed / windowMs;
+      percent = Math.round(5 + recovery * 35);
+    }
+  }
+
+  const outcomes = (providerTelemetry[providerName] && providerTelemetry[providerName].outcomes) || [];
+  const recent = outcomes.filter((item) => {
+    const ts = Date.parse(item.ts || "");
+    return !Number.isNaN(ts) && now - ts <= 6 * 60 * 60 * 1000;
+  });
+
+  if (recent.length > 0) {
+    const limitedCount = recent.filter((item) => item.limited).length;
+    const failedCount = recent.filter((item) => !item.ok).length;
+    const riskScore = (limitedCount * 2 + failedCount) / Math.max(recent.length * 2, 1);
+    percent -= Math.round(riskScore * 40);
+
+    const streak = [...recent].reverse().findIndex((item) => !item.ok);
+    const successStreak = streak === -1 ? recent.length : streak;
+    if (successStreak >= 3) {
+      percent += 10;
+    }
+  }
+
+  percent = clamp(percent, 5, 95);
+  const confidence = recent.length >= 8 ? "high" : recent.length >= 3 ? "medium" : "low";
+  return { percent, confidence };
 }
 
 async function notifyUser(message) {
@@ -616,15 +686,17 @@ async function runPrompt(userPrompt) {
   const firstProvider = preflight.routeProvider;
   let result = await runProviderWithPrompt(firstProvider, fullPrompt);
   const firstErrorText = result.errorText || result.response || "";
+  const firstWasLimited = !result.ok && isQuotaOrRateLimitError(firstErrorText);
 
   const shouldFallback =
     config.enableAutoFallback &&
     !result.ok &&
-    isQuotaOrRateLimitError(firstErrorText);
+    firstWasLimited;
 
-  if (!result.ok && isQuotaOrRateLimitError(firstErrorText)) {
+  if (firstWasLimited) {
     setLimitEntry(firstProvider, firstErrorText);
   }
+  recordProviderOutcome(firstProvider, result, firstWasLimited);
 
   if (shouldFallback) {
     const fallbackProvider = getFallbackProvider(firstProvider);
@@ -632,9 +704,11 @@ async function runPrompt(userPrompt) {
     await notifyUser(`⚠️ ${firstProvider} nådde begränsning. Växlar till ${fallbackProvider}.`);
     result = await runProviderWithPrompt(fallbackProvider, fullPrompt);
     const fallbackErrorText = result.errorText || result.response || "";
-    if (!result.ok && isQuotaOrRateLimitError(fallbackErrorText)) {
+    const fallbackWasLimited = !result.ok && isQuotaOrRateLimitError(fallbackErrorText);
+    if (fallbackWasLimited) {
       setLimitEntry(fallbackProvider, fallbackErrorText);
     }
+    recordProviderOutcome(fallbackProvider, result, fallbackWasLimited);
   }
 
   if (!result.ok) {

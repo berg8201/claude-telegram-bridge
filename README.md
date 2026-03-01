@@ -154,7 +154,7 @@ bridge telegram
 - `/provider` shows active provider.
 - `/provider claude` switches to Claude.
 - `/provider codex` switches to Codex.
-- `/risk` shows provider risk/limit status.
+- `/risk` shows provider risk/limit status plus estimated remaining capacity (heuristic, not official quota).
 - `/summary` shows the running persisted summary that is shared across providers.
 - `/push [remote] [branch]` runs `git push` from current project.
 - `/clear` clears in-memory conversation history.
