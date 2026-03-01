@@ -151,6 +151,9 @@ bridge telegram
 ### Commands
 
 - `/help` shows available bridge commands.
+- `/status` shows current mode, provider, queue and session info.
+- `/doctor` runs quick health checks (git, providers, hook, Telegram config/API).
+- `/commit "message"` runs `git add -A` and `git commit -m`.
 - `/provider` shows active provider.
 - `/provider claude` switches to Claude.
 - `/provider codex` switches to Codex.

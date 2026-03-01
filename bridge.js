@@ -39,17 +39,24 @@ function printNormalBanner(providerName) {
   const title = paint("1;36", "Bridge Normal Mode");
   const provider = paint("1", providerName);
   console.log(`${title} ${dim(`(provider: ${provider})`)}`);
-  console.log(dim("Commands: /help /provider /provider claude /provider codex /risk /summary /push [remote] [branch] /clear"));
+  console.log(
+    dim(
+      'Commands: /help /status /doctor /provider /provider claude /provider codex /risk /summary /commit "msg" /push [remote] [branch] /clear'
+    )
+  );
 }
 
 function normalHelpText() {
   return [
     "Kommandon:",
     "  /help                         Visa hjälp",
+    "  /status                       Visa bridge-status",
+    "  /doctor                       Kör snabba hälsokontroller",
     "  /provider                     Visa aktiv provider",
     "  /provider claude|codex        Byt provider",
     "  /risk                         Visa risk/limit-status",
     "  /summary                      Visa sammanfattning",
+    '  /commit "message"             Add+commit alla ändringar',
     "  /push [remote] [branch]       Kör git push",
     "  /clear                        Rensa historik",
   ].join("\n");
@@ -363,6 +370,7 @@ if (!runningSummary && conversationHistory.length > 0) {
 }
 let currentProvider = config.primaryProvider;
 let runQueue = Promise.resolve();
+let queueDepth = 0;
 let bot = null;
 
 const providers = {
@@ -609,6 +617,74 @@ function runCommand(command, args, options = {}) {
   });
 }
 
+function parseCommitMessage(text) {
+  const raw = text.slice("/commit".length).trim();
+  if (!raw) return "";
+  if (
+    (raw.startsWith('"') && raw.endsWith('"')) ||
+    (raw.startsWith("'") && raw.endsWith("'"))
+  ) {
+    return raw.slice(1, -1).trim();
+  }
+  return raw;
+}
+
+async function commandExists(cmd) {
+  if (!cmd) return false;
+  const result = await runCommand("which", [cmd]);
+  return result.ok;
+}
+
+async function runDoctor() {
+  const rows = [];
+
+  const gitRepo = await runCommand("git", ["rev-parse", "--is-inside-work-tree"]);
+  rows.push(gitRepo.ok ? "✅ git repo: ok" : "❌ git repo: fail");
+
+  const claudeOk = await commandExists(config.claudeCommand);
+  rows.push(
+    claudeOk
+      ? `✅ claude command: ${config.claudeCommand}`
+      : `❌ claude command missing: ${config.claudeCommand}`
+  );
+
+  const codexOk = await commandExists(config.codexCommand);
+  rows.push(
+    codexOk
+      ? `✅ codex command: ${config.codexCommand}`
+      : `❌ codex command missing: ${config.codexCommand}`
+  );
+
+  const hooksPathResult = await runCommand("git", ["config", "--get", "core.hooksPath"]);
+  const hooksPath = hooksPathResult.ok ? hooksPathResult.output.trim() : "";
+  const hookFile = path.join(process.cwd(), hooksPath || ".githooks", "post-push");
+  const hookOk = hooksPathResult.ok && fs.existsSync(hookFile);
+  rows.push(hookOk ? `✅ git hook: ${hooksPath || ".githooks"}` : "⚠️ git hook: saknas eller ej konfigurerad");
+
+  const hasTelegramConfig = Boolean(config.botToken && config.chatId);
+  rows.push(hasTelegramConfig ? "✅ telegram config: BOT_TOKEN + CHAT_ID" : "⚠️ telegram config: saknas");
+
+  if (hasTelegramConfig) {
+    const url = `https://api.telegram.org/bot${config.botToken}/getMe`;
+    const netResult = await runCommand("curl", ["-sS", "--max-time", "8", url]);
+    const ok = netResult.ok && /"ok"\s*:\s*true/.test(netResult.output || "");
+    rows.push(ok ? "✅ telegram API: reachable" : "⚠️ telegram API: unreachable/invalid response");
+  }
+
+  return `Doctor\n${rows.join("\n")}`;
+}
+
+function formatStatus() {
+  const status = [
+    `Mode: ${cli.mode}`,
+    `Provider: ${currentProvider}`,
+    `Queue: ${queueDepth}`,
+    `History turns: ${conversationHistory.length}`,
+    `Session file: ${config.sessionFile}`,
+  ];
+  return `Bridge status\n${status.join("\n")}\n\n${formatLimitState()}`;
+}
+
 async function runPushNotifier(remote, remoteUrl) {
   const notifierScript = path.join(__dirname, "scripts", "telegram-push-notify.sh");
   if (!fs.existsSync(notifierScript)) {
@@ -732,17 +808,66 @@ async function runPrompt(userPrompt) {
 }
 
 function enqueuePrompt(userPrompt) {
+  queueDepth += 1;
   runQueue = runQueue
     .then(() => runPrompt(userPrompt))
     .catch((error) => {
       console.error(`[bridge] Oväntat fel: ${error.message}`);
       return notifyUser(`❌ Oväntat fel: ${error.message}`);
+    })
+    .finally(() => {
+      queueDepth = Math.max(0, queueDepth - 1);
     });
 }
 
 async function handleCommand(text, reply) {
   if (text === "/help") {
     await reply(normalHelpText());
+    return true;
+  }
+
+  if (text === "/status") {
+    await reply(formatStatus());
+    return true;
+  }
+
+  if (text === "/doctor") {
+    await reply("🩺 Kör doctor...");
+    await reply(await runDoctor());
+    return true;
+  }
+
+  if (text.startsWith("/commit")) {
+    const message = parseCommitMessage(text);
+    if (!message) {
+      await reply('❌ Usage: /commit "message"');
+      return true;
+    }
+
+    const statusResult = await runCommand("git", ["status", "--porcelain"], { cwd: process.cwd() });
+    if (!statusResult.ok) {
+      await reply(`❌ Kunde inte läsa git status:\n${clip(statusResult.output || statusResult.error, 1200)}`);
+      return true;
+    }
+    if (!statusResult.output.trim()) {
+      await reply("⚠️ Inga ändringar att committa.");
+      return true;
+    }
+
+    await reply("📝 Kör: git add -A && git commit ...");
+    const addResult = await runCommand("git", ["add", "-A"], { cwd: process.cwd() });
+    if (!addResult.ok) {
+      await reply(`❌ git add misslyckades:\n${clip(addResult.output || addResult.error, 1400)}`);
+      return true;
+    }
+
+    const commitResult = await runCommand("git", ["commit", "-m", message], { cwd: process.cwd() });
+    if (!commitResult.ok) {
+      await reply(`❌ git commit misslyckades:\n${clip(commitResult.output || commitResult.error, 1400)}`);
+      return true;
+    }
+
+    await reply(`✅ Commit klar.\n${clip(commitResult.output, 1600)}`);
     return true;
   }
 
@@ -840,7 +965,7 @@ function startTelegramBridge() {
 
   bot.sendMessage(
     config.chatId,
-    `🚀 *claude-telegram-bridge* startad!\n\nAktiv provider: *${currentProvider}*\nSkicka text för att köra. Kommandon: /help, /provider, /provider claude, /provider codex, /risk, /summary, /push [remote] [branch], /clear`,
+    `🚀 *claude-telegram-bridge* startad!\n\nAktiv provider: *${currentProvider}*\nSkicka text för att köra. Kommandon: /help, /status, /doctor, /provider, /provider claude, /provider codex, /risk, /summary, /commit "msg", /push [remote] [branch], /clear`,
     { parse_mode: "Markdown" }
   );
 }
