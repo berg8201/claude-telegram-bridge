@@ -220,6 +220,13 @@ function loadConfig(mode) {
       false
     ),
     outputStyle: (process.env.OUTPUT_STYLE || fileConfig.outputStyle || "pretty").toLowerCase(),
+    providerTimeoutSeconds: Number(
+      process.env.PROVIDER_TIMEOUT_SECONDS ||
+        process.env.TIMEOUT_SECONDS ||
+        fileConfig.providerTimeoutSeconds ||
+        fileConfig.timeoutSeconds ||
+        300
+    ),
   };
 
   if (!["claude", "codex"].includes(config.primaryProvider)) {
@@ -264,6 +271,11 @@ function loadConfig(mode) {
 
   if (!["pretty", "plain"].includes(config.outputStyle)) {
     console.error("[bridge] OUTPUT_STYLE måste vara 'pretty' eller 'plain'.");
+    process.exit(1);
+  }
+
+  if (config.providerTimeoutSeconds < 5 || Number.isNaN(config.providerTimeoutSeconds)) {
+    console.error("[bridge] PROVIDER_TIMEOUT_SECONDS måste vara minst 5.");
     process.exit(1);
   }
 
@@ -826,6 +838,7 @@ function formatStatus() {
     `Session persistence: ${config.enableSessionPersistence ? "enabled" : "disabled"}`,
     `Prompt log redaction: ${config.redactPromptLogs ? "enabled" : "disabled"}`,
     `Mutating git commands: ${config.enableMutatingGitCommands ? "enabled" : "disabled"}`,
+    `Provider timeout: ${config.providerTimeoutSeconds}s`,
     `Output style: ${config.outputStyle}`,
   ];
   return `Bridge status\n${status.join("\n")}\n\n${formatLimitState()}`;
@@ -908,9 +921,10 @@ async function runPushNotifier(remote, remoteUrl) {
   return { ok: true, skipped: false };
 }
 
-function runProviderWithPrompt(providerName, fullPrompt) {
+function runProviderWithPrompt(providerName, fullPrompt, options = {}) {
   return new Promise((resolve) => {
     const provider = providers[providerName];
+    const allowInteractiveReplies = Boolean(options.allowInteractiveReplies);
     console.log(`[bridge] Kör ${providerName} med kommando: ${provider.command} ${provider.args.join(" ")}`);
 
     const child = spawn(provider.command, provider.args, {
@@ -921,9 +935,72 @@ function runProviderWithPrompt(providerName, fullPrompt) {
     let outputBuffer = "";
     let errorBuffer = "";
     let spawnError = null;
+    let timedOut = false;
+    let resolved = false;
+    let killTimer = null;
+    let hardKillTimer = null;
+    const timeoutMs = Math.max(5, config.providerTimeoutSeconds) * 1000;
+
+    const clearTimers = () => {
+      if (killTimer) {
+        clearTimeout(killTimer);
+        killTimer = null;
+      }
+      if (hardKillTimer) {
+        clearTimeout(hardKillTimer);
+        hardKillTimer = null;
+      }
+    };
 
     child.stdin.write(fullPrompt);
-    child.stdin.end();
+
+    let inputForwarder = null;
+    let cleanedUp = false;
+    const cleanupInput = () => {
+      if (cleanedUp) return;
+      cleanedUp = true;
+      if (inputForwarder) {
+        process.stdin.off("data", inputForwarder);
+        inputForwarder = null;
+      }
+      if (!child.stdin.destroyed) {
+        child.stdin.end();
+      }
+      if (allowInteractiveReplies && normalRl) {
+        normalRl.resume();
+        refreshNormalPrompt();
+        normalRl.prompt(true);
+      }
+    };
+
+    killTimer = setTimeout(() => {
+      timedOut = true;
+      errorBuffer += `\nProvider timeout efter ${config.providerTimeoutSeconds}s. Avbryter körning.`;
+      child.kill("SIGTERM");
+      hardKillTimer = setTimeout(() => {
+        if (!child.killed) {
+          child.kill("SIGKILL");
+        }
+      }, 2500);
+    }, timeoutMs);
+
+    if (allowInteractiveReplies) {
+      if (!/\n$/.test(fullPrompt)) {
+        child.stdin.write("\n");
+      }
+      if (normalRl) {
+        normalRl.pause();
+      }
+      process.stdin.resume();
+      inputForwarder = (chunk) => {
+        if (!child.stdin.destroyed) {
+          child.stdin.write(chunk);
+        }
+      };
+      process.stdin.on("data", inputForwarder);
+    } else {
+      child.stdin.end();
+    }
 
     child.stdout.on("data", (data) => {
       process.stdout.write(data);
@@ -940,13 +1017,18 @@ function runProviderWithPrompt(providerName, fullPrompt) {
     });
 
     child.on("close", (code) => {
+      if (resolved) return;
+      resolved = true;
+      clearTimers();
+      cleanupInput();
       console.log(`\n[bridge] ${providerName} avslutades med kod ${code}`);
       resolve({
         provider: providerName,
-        ok: code === 0 && !spawnError,
+        ok: code === 0 && !spawnError && !timedOut,
         code,
         response: outputBuffer.trim(),
         errorText: `${errorBuffer}\n${spawnError ? spawnError.message : ""}`.trim(),
+        timedOut,
       });
     });
   });
@@ -971,7 +1053,8 @@ async function runPrompt(userPrompt) {
   if (!bot) {
     console.log(info(`Arbetar: ${firstProvider} | prompt="${activeJob.prompt}"`));
   }
-  let result = await runProviderWithPrompt(firstProvider, fullPrompt);
+  const allowInteractiveReplies = cli.mode === "normal" && !bot;
+  let result = await runProviderWithPrompt(firstProvider, fullPrompt, { allowInteractiveReplies });
   const firstErrorText = result.errorText || result.response || "";
   const firstWasLimited = !result.ok && isQuotaOrRateLimitError(firstErrorText);
 
@@ -989,7 +1072,9 @@ async function runPrompt(userPrompt) {
     const fallbackProvider = getFallbackProvider(firstProvider);
     console.log(`[bridge] Växlar till fallback-provider: ${fallbackProvider}`);
     await notifyUser(`⚠️ ${firstProvider} nådde begränsning. Växlar till ${fallbackProvider}.`);
-    result = await runProviderWithPrompt(fallbackProvider, fullPrompt);
+    result = await runProviderWithPrompt(fallbackProvider, fullPrompt, {
+      allowInteractiveReplies,
+    });
     const fallbackErrorText = result.errorText || result.response || "";
     const fallbackWasLimited = !result.ok && isQuotaOrRateLimitError(fallbackErrorText);
     if (fallbackWasLimited) {

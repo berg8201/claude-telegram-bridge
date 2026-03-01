@@ -19,5 +19,6 @@
   "claudeCommand": "claude",
   "codexCommand": "codex",
   "claudeArgs": "--print",
-  "codexArgs": "exec -"
+  "codexArgs": "exec -",
+  "providerTimeoutSeconds": 300
 }

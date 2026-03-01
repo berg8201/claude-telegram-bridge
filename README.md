@@ -65,6 +65,7 @@ CLAUDE_COMMAND=claude
 CODEX_COMMAND=codex
 CLAUDE_ARGS=--print
 CODEX_ARGS=exec -
+PROVIDER_TIMEOUT_SECONDS=300
 ```
 
 Alternative fallback: copy the example config and fill in your values:
@@ -95,7 +96,8 @@ cp /path/to/claude-telegram-bridge/config.example.json ~/.config/bridge/config.j
   "claudeCommand": "claude",
   "codexCommand": "codex",
   "claudeArgs": "--print",
-  "codexArgs": "exec -"
+  "codexArgs": "exec -",
+  "providerTimeoutSeconds": 300
 }
 ```
 
@@ -121,6 +123,7 @@ cp /path/to/claude-telegram-bridge/config.example.json ~/.config/bridge/config.j
 | `summaryMaxChars` | Max summary size sent between providers |
 | `claudeCommand` / `codexCommand` | CLI command names |
 | `claudeArgs` / `codexArgs` | Space-separated CLI args (defaults: `claude=--print`, `codex=exec -`) |
+| `providerTimeoutSeconds` | Max runtime per provider call before forced stop (default `300`) |
 
 Load order: environment variables override local project files (`./.env`, `./config.json`), which override global files (`~/.config/bridge/.env`, `~/.config/bridge/config.json`).
 
@@ -180,6 +183,7 @@ bridge telegram
 ## Notes
 
 - `bridge normal` prioritizes reliability (shared history + auto-fallback), not full provider TUI rendering.
+- In `bridge normal`, provider follow-up prompts (for example command execution approvals) can be answered directly in terminal while a job is running.
 - `bridge passthrough` prioritizes original CLI experience and forwards arguments directly to provider command.
 - Session history and summary persist across restarts in a per-project session file (or `SESSION_FILE` if explicitly set).
 
