@@ -37,7 +37,27 @@ npm install
 
 ## Configuration
 
-Copy the example config and fill in your values:
+Recommended (local and production): use a `.env` file in the project root.
+
+```bash
+cp .env.example .env
+```
+
+Then edit `.env` with your values:
+
+```env
+BOT_TOKEN=YOUR_TELEGRAM_BOT_TOKEN
+CHAT_ID=YOUR_TELEGRAM_CHAT_ID
+TIMEOUT_SECONDS=30
+```
+
+Then just run:
+
+```bash
+node bridge.js
+```
+
+Alternative fallback: copy the example config and fill in your values:
 
 ```bash
 cp config.example.json config.json
@@ -51,11 +71,13 @@ cp config.example.json config.json
 }
 ```
 
-| Field            | Description                                                  |
-| ---------------- | ------------------------------------------------------------ |
-| `botToken`       | Telegram bot token from @BotFather                           |
-| `chatId`         | Your personal Telegram chat ID                               |
-| `timeoutSeconds` | Seconds to wait for local input before forwarding to Telegram |
+| Field            | Description                                |
+| ---------------- | ------------------------------------------ |
+| `botToken`       | Telegram bot token from @BotFather         |
+| `chatId`         | Your personal Telegram chat ID             |
+| `timeoutSeconds` | Optional timeout value (default: `30`)     |
+
+Values in process environment override values from `.env`, and both override `config.json`.
 
 > **Important:** `config.json` is listed in `.gitignore` and should never be committed.
 

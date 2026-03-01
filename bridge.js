@@ -1,9 +1,78 @@
 #!/usr/bin/env node
 
 const { spawn } = require("child_process");
+const fs = require("fs");
 const readline = require("readline");
 const TelegramBot = require("node-telegram-bot-api");
-const config = require("./config.json");
+
+function loadDotEnv() {
+  const envPath = "./.env";
+  if (!fs.existsSync(envPath)) return;
+
+  let content = "";
+  try {
+    content = fs.readFileSync(envPath, "utf8");
+  } catch (error) {
+    console.error(`[bridge] Kunde inte läsa .env: ${error.message}`);
+    process.exit(1);
+  }
+
+  for (const rawLine of content.split(/\r?\n/)) {
+    const line = rawLine.trim();
+    if (!line || line.startsWith("#")) continue;
+
+    const separatorIndex = line.indexOf("=");
+    if (separatorIndex <= 0) continue;
+
+    const key = line.slice(0, separatorIndex).trim();
+    let value = line.slice(separatorIndex + 1).trim();
+
+    if (
+      (value.startsWith('"') && value.endsWith('"')) ||
+      (value.startsWith("'") && value.endsWith("'"))
+    ) {
+      value = value.slice(1, -1);
+    }
+
+    if (!(key in process.env)) {
+      process.env[key] = value;
+    }
+  }
+}
+
+function loadConfig() {
+  let fileConfig = {};
+
+  if (fs.existsSync("./config.json")) {
+    try {
+      fileConfig = require("./config.json");
+    } catch (error) {
+      console.error(`[bridge] Kunde inte läsa config.json: ${error.message}`);
+      process.exit(1);
+    }
+  }
+
+  const config = {
+    botToken: process.env.BOT_TOKEN || fileConfig.botToken,
+    chatId: process.env.CHAT_ID || fileConfig.chatId,
+    timeoutSeconds: Number(process.env.TIMEOUT_SECONDS || fileConfig.timeoutSeconds || 30),
+  };
+
+  if (!config.botToken) {
+    console.error("[bridge] Saknar bot-token. Sätt BOT_TOKEN eller config.json.botToken.");
+    process.exit(1);
+  }
+
+  if (!config.chatId) {
+    console.error("[bridge] Saknar chat-id. Sätt CHAT_ID eller config.json.chatId.");
+    process.exit(1);
+  }
+
+  return config;
+}
+
+loadDotEnv();
+const config = loadConfig();
 
 const bot = new TelegramBot(config.botToken, { polling: true });
 
