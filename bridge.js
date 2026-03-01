@@ -443,6 +443,38 @@ async function notifyUser(message) {
   console.log(message);
 }
 
+function runCommand(command, args, options = {}) {
+  return new Promise((resolve) => {
+    const child = spawn(command, args, {
+      cwd: options.cwd || process.cwd(),
+      env: process.env,
+      stdio: ["ignore", "pipe", "pipe"],
+    });
+
+    let stdout = "";
+    let stderr = "";
+    let spawnError = null;
+
+    child.stdout.on("data", (data) => {
+      stdout += data.toString();
+    });
+    child.stderr.on("data", (data) => {
+      stderr += data.toString();
+    });
+    child.on("error", (error) => {
+      spawnError = error;
+    });
+    child.on("close", (code) => {
+      resolve({
+        ok: code === 0 && !spawnError,
+        code,
+        output: `${stdout}${stderr}`.trim(),
+        error: spawnError ? spawnError.message : "",
+      });
+    });
+  });
+}
+
 function runProviderWithPrompt(providerName, fullPrompt) {
   return new Promise((resolve) => {
     const provider = providers[providerName];
@@ -548,6 +580,26 @@ function enqueuePrompt(userPrompt) {
 }
 
 async function handleCommand(text, reply) {
+  if (text.startsWith("/push")) {
+    const parts = text.trim().split(/\s+/).filter(Boolean);
+    const remote = parts[1] || "origin";
+    const branch = parts[2] || "";
+    const args = ["push", remote];
+    if (branch) args.push(branch);
+
+    await reply(`⏫ Kör: git ${args.join(" ")}`);
+    const result = await runCommand("git", args, { cwd: process.cwd() });
+
+    if (result.ok) {
+      const out = result.output ? `\n${clip(result.output, 3200)}` : "";
+      await reply(`✅ Push lyckades.${out}`);
+    } else {
+      const out = result.output || result.error || `exit code ${result.code}`;
+      await reply(`❌ Push misslyckades.\n${clip(out, 3200)}`);
+    }
+    return true;
+  }
+
   if (text === "/clear") {
     conversationHistory.length = 0;
     runningSummary = "";
@@ -613,7 +665,7 @@ function startTelegramBridge() {
 
   bot.sendMessage(
     config.chatId,
-    `🚀 *claude-telegram-bridge* startad!\n\nAktiv provider: *${currentProvider}*\nSkicka text för att köra. Kommandon: /provider, /provider claude, /provider codex, /risk, /summary, /clear`,
+    `🚀 *claude-telegram-bridge* startad!\n\nAktiv provider: *${currentProvider}*\nSkicka text för att köra. Kommandon: /provider, /provider claude, /provider codex, /risk, /summary, /push [remote] [branch], /clear`,
     { parse_mode: "Markdown" }
   );
 }
@@ -625,7 +677,7 @@ function startNormalBridge(rawArgs) {
   }
 
   console.log(
-    `[bridge] Normal mode startad. Aktiv provider: ${currentProvider}. Kommandon: /provider, /provider claude, /provider codex, /risk, /summary, /clear`
+    `[bridge] Normal mode startad. Aktiv provider: ${currentProvider}. Kommandon: /provider, /provider claude, /provider codex, /risk, /summary, /push [remote] [branch], /clear`
   );
 
   const rl = readline.createInterface({ input: process.stdin, output: process.stdout });

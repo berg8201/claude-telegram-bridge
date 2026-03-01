@@ -154,6 +154,7 @@ bridge telegram
 - `/provider codex` switches to Codex.
 - `/risk` shows provider risk/limit status.
 - `/summary` shows the running persisted summary that is shared across providers.
+- `/push [remote] [branch]` runs `git push` from current project.
 - `/clear` clears in-memory conversation history.
 
 ## Notes

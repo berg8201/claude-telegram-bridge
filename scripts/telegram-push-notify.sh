@@ -4,6 +4,15 @@ set -euo pipefail
 REMOTE_NAME="${1:-origin}"
 REMOTE_URL="${2:-unknown}"
 BRIDGE_HOME="${BRIDGE_HOME:-$HOME/.config/bridge}"
+LOG_FILE="$BRIDGE_HOME/push-hook.log"
+
+log_msg() {
+  local msg="$1"
+  mkdir -p "$BRIDGE_HOME" 2>/dev/null || true
+  if ! echo "$(date -Is) ${msg}" >>"$LOG_FILE" 2>/dev/null; then
+    echo "$(date -Is) ${msg}" >>"/tmp/bridge-push-hook.log" 2>/dev/null || true
+  fi
+}
 
 load_env_file() {
   local file="$1"
@@ -42,7 +51,7 @@ if [ -z "$BOT_TOKEN" ] || [ -z "$CHAT_ID" ]; then
 fi
 
 if ! command -v curl >/dev/null 2>&1; then
-  echo "[bridge-hook] curl saknas, skippar Telegram-notis" >&2
+  log_msg "[bridge-hook] curl saknas, skippar Telegram-notis"
   exit 0
 fi
 
@@ -80,9 +89,10 @@ Host: ${USER_NAME}@${HOST_NAME}
 Commit: ${LAST_COMMIT}
 Refs:${UPDATES}"
 
-curl -sS --max-time 10 \
+if ! curl -sS --max-time 10 \
   -X POST "https://api.telegram.org/bot${BOT_TOKEN}/sendMessage" \
   -d "chat_id=${CHAT_ID}" \
   --data-urlencode "text=${TEXT}" \
-  >/dev/null || true
-
+  >/dev/null; then
+  log_msg "[bridge-hook] Telegram send failed (remote=${REMOTE_NAME}, branch=${BRANCH})"
+fi
