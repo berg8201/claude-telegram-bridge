@@ -211,22 +211,3 @@ After running `npm run hooks:install`, each successful `git push` in this repo s
 ## License
 
 MIT
-
-## Landing Page (draft)
-
-A starter landing page is available in `landing/`.
-
-Open it directly:
-
-```bash
-xdg-open landing/index.html
-```
-
-Run it as a Docker image:
-
-```bash
-docker build -t bridge-landing ./landing
-docker run --rm -p 8080:80 bridge-landing
-```
-
-Then open `http://localhost:8080`.
